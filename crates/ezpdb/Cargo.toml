@@ -9,8 +9,9 @@ repository = "https://github.com/landaire/pdbview"
 description = "High-level library for https://crates.io/crates/pdb"
 
 [dependencies]
-pdb = "0.8"
+ms-pdb = { path = "../../../pdb-rs/pdb" }
+anyhow = "1.0"
 thiserror = "1.0"
 log = "0.4"
 serde = { version = "1.0", features = ['derive', 'rc'], optional = true }
-uuid = "1.2"
+uuid = "1.10"

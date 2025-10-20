@@ -5,7 +5,7 @@ use crate::symbol_types::TypeIndexNumber;
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("the PDB parsing library encountered an error: {0}")]
-    PdbCrateError(#[from] pdb::Error),
+    PdbCrateError(#[from] anyhow::Error),
 
     #[error("dependency `{0}` required for parsing is unavailable")]
     MissingDependency(&'static str),
