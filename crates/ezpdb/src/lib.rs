@@ -431,6 +431,12 @@ pub(crate) fn handle_type_data(
             let typ = (*data, type_stream, output_pdb).try_into()?;
             Type::UdtSrcLineType(typ)
         }
+        TypeData::UdtModSrcLine(data) => {
+            // UdtModSrcLine is similar to UdtSrcLine but includes module index
+            // We'll convert it to UdtSrcLineType (ignoring module index for now)
+            let typ = (*data, type_stream, output_pdb).try_into()?;
+            Type::UdtSrcLineType(typ)
+        }
         TypeData::Unknown => {
             // Unknown types are not supported by ms-codeview - they represent type kinds
             // that the library doesn't recognize. Create a placeholder.

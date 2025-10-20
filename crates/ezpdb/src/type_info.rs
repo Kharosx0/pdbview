@@ -1632,3 +1632,28 @@ impl TryFrom<FromUdtSrcLine<'_, '_>> for UdtSrcLineType {
         })
     }
 }
+
+type FromUdtModSrcLine<'a, 'b> = (
+    &'b ms_pdb::codeview::types::UdtModSrcLine,
+    &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
+    &'b mut crate::symbol_types::ParsedPdb,
+);
+
+impl TryFrom<FromUdtModSrcLine<'_, '_>> for UdtSrcLineType {
+    type Error = Error;
+    fn try_from(data: FromUdtModSrcLine<'_, '_>) -> Result<Self, Self::Error> {
+        let (udt_mod_src_line, type_stream, output_pdb) = data;
+        
+        // Similar to UdtSrcLine, but includes module index (imod)
+        // src is a NameIndex referencing /names stream
+        let source_file = None;
+        
+        let udt = crate::handle_type(udt_mod_src_line.ty.get(), output_pdb, type_stream)?;
+        
+        Ok(UdtSrcLineType {
+            source_file,
+            line_number: udt_mod_src_line.line.get(),
+            udt,
+        })
+    }
+}
