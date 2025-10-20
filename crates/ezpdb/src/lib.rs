@@ -179,8 +179,12 @@ fn handle_symbol<'a>(
         }
         SymData::Proc(data) => {
             debug!("procedure: {:?}", data);
-            let converted_symbol: crate::symbol_types::Procedure =
+            let is_global = matches!(sym.kind, ms_pdb::codeview::syms::SymKind::S_GPROC32);
+            let is_dpc = matches!(sym.kind, ms_pdb::codeview::syms::SymKind::S_LPROC32_DPC);
+            let mut converted_symbol: crate::symbol_types::Procedure =
                 (&data, base_address, type_stream).into();
+            converted_symbol.is_global = is_global;
+            converted_symbol.is_dpc = is_dpc;
             output_pdb.procedures.push(converted_symbol);
         }
         SymData::BuildInfo(data) => {
@@ -193,8 +197,10 @@ fn handle_symbol<'a>(
         }
         // Note: CompileFlags not available in ms-pdb, skipping
         SymData::Data(data) => {
-            let sym: crate::symbol_types::Data =
+            let is_global = matches!(sym.kind, ms_pdb::codeview::syms::SymKind::S_GDATA32 | ms_pdb::codeview::syms::SymKind::S_GMANDATA);
+            let mut sym: crate::symbol_types::Data =
                 (&data, base_address, type_stream, &output_pdb.types).try_into()?;
+            sym.is_global = is_global;
             if sym.is_global {
                 output_pdb.global_data.push(sym);
             }

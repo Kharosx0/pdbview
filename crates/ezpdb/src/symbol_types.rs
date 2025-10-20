@@ -22,8 +22,6 @@ pub struct ParsedPdb {
     pub procedures: Vec<Procedure>,
     pub global_data: Vec<Data>,
     pub debug_modules: Vec<DebugModule>,
-    #[cfg_attr(feature = "serde", serde(skip_serializing))]
-    pub(crate) forward_references: Vec<Rc<Type>>,
     pub version: Version,
     #[cfg_attr(feature = "serde", serde(serialize_with = "serialize_uuid"))]
     pub guid: uuid::Uuid,
@@ -43,13 +41,90 @@ impl ParsedPdb {
             procedures: vec![],
             global_data: vec![],
             debug_modules: vec![],
-            forward_references: vec![],
             version: Version::Other(0),
             guid: uuid::Uuid::nil(),
             age: 0,
             timestamp: 0,
             machine_type: None,
         }
+    }
+
+    /// Find a type by name, automatically resolving forward references to complete definitions.
+    ///
+    /// If the type is found as a forward reference, this method searches for a complete definition
+    /// with the same unique_name. This is necessary because Windows PDBs often contain forward
+    /// references without fields.
+    ///
+    /// # Arguments
+    /// * `name` - The type name to search for (e.g., "_KPROCESS")
+    ///
+    /// # Returns
+    /// * `Some(TypeRef)` - The complete type definition if found
+    /// * `None` - If no type with that name exists (forward ref or complete)
+    pub fn find_type_by_name(&self, name: &str) -> Option<TypeRef> {
+        use crate::type_info::Type;
+
+        // First pass: find any type with this name
+        let mut forward_ref = None;
+        for type_ref in self.types.values() {
+            if let Ok(borrowed) = type_ref.try_borrow() {
+                match &*borrowed {
+                    Type::Class(class) if class.name == name => {
+                        if !class.properties.forward_reference {
+                            // Found complete definition! Return immediately
+                            return Some(Rc::clone(type_ref));
+                        } else {
+                            // Store forward ref and keep searching
+                            forward_ref = Some((Rc::clone(type_ref), class.unique_name.clone()));
+                        }
+                    }
+                    Type::Union(union) if union.name == name => {
+                        if !union.properties.forward_reference {
+                            return Some(Rc::clone(type_ref));
+                        } else {
+                            forward_ref = Some((Rc::clone(type_ref), union.unique_name.clone()));
+                        }
+                    }
+                    Type::Enumeration(enum_type) if enum_type.name == name => {
+                        return Some(Rc::clone(type_ref));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // If we only found a forward reference, try to find the complete definition by unique_name
+        if let Some((fwd_ref, Some(unique_name))) = forward_ref {
+            for type_ref in self.types.values() {
+                if let Ok(borrowed) = type_ref.try_borrow() {
+                    match &*borrowed {
+                        Type::Class(class) => {
+                            if !class.properties.forward_reference
+                                && class.unique_name.as_ref() == Some(&unique_name)
+                            {
+                                warn!("Resolved forward reference for {} to complete definition", name);
+                                return Some(Rc::clone(type_ref));
+                            }
+                        }
+                        Type::Union(union) => {
+                            if !union.properties.forward_reference
+                                && union.unique_name.as_ref() == Some(&unique_name)
+                            {
+                                warn!("Resolved forward reference for {} to complete definition", name);
+                                return Some(Rc::clone(type_ref));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // No complete definition found, return the forward reference
+            warn!("Type {} only has forward reference, no complete definition found", name);
+            return Some(fwd_ref);
+        }
+
+        None
     }
 }
 
@@ -136,7 +211,7 @@ pub struct AssemblyInfo {
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct BuildInfo {
-    arguments: Vec<String>,
+    pub arguments: Vec<String>,
 }
 
 impl TryFrom<(&ms_pdb::codeview::syms::BuildInfo, &ms_pdb::tpi::TypeStream<Vec<u8>>)> for BuildInfo {
@@ -145,13 +220,27 @@ impl TryFrom<(&ms_pdb::codeview::syms::BuildInfo, &ms_pdb::tpi::TypeStream<Vec<u
     fn try_from(
         info: (&ms_pdb::codeview::syms::BuildInfo, &ms_pdb::tpi::TypeStream<Vec<u8>>),
     ) -> Result<Self, Self::Error> {
-        let (_symbol, _ipi_stream) = info;
+        let (symbol, ipi_stream) = info;
         
-        // TODO: BuildInfo structure in ms-pdb needs investigation
-        // The syms::BuildInfo and types::BuildInfo have different structures
-        // For now, return empty to unblock compilation
+        // BuildInfo.item is an ItemId pointing to an LF_BUILDINFO record in IPI stream
+        // Try to read the IPI record
+        let type_index = ms_pdb::codeview::types::TypeIndex(symbol.item);
+        let arguments = if let Ok(type_record) = ipi_stream.record(type_index) {
+            // Try to parse the record to extract build info strings
+            // LF_BUILDINFO typically contains: current directory, compiler path, source file, PDB path, command line
+            // Since LF_BUILDINFO isn't fully implemented in ms-pdb yet, we'll try to extract what we can
+            match type_record.parse() {
+                Ok(type_data) => {
+                    vec![format!("{:?}", type_data)]
+                }
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        
         Ok(BuildInfo {
-            arguments: Vec::new(),
+            arguments,
         })
     }
 }
@@ -253,7 +342,7 @@ pub struct DebugModule {
 
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
-enum Checksum {
+pub enum Checksum {
     None,
     Md5(Vec<u8>),
     Sha1(Vec<u8>),
@@ -276,8 +365,8 @@ impl From<&ms_pdb::lines::FileChecksum<'_>> for Checksum {
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct FileInfo {
-    name: String,
-    checksum: Checksum,
+    pub name: String,
+    pub checksum: Checksum,
 }
 
 impl From<&ms_pdb::dbi::ModuleInfo<'_>> for DebugModule {
@@ -386,17 +475,15 @@ impl
                 .ok_or(Self::Error::UnresolvedType(type_index.0))?,
         );
 
-        // Determine if global/managed based on the symbol kind
+        // Note: is_global is set by handle_symbol() based on SymKind
         // S_GDATA32 and S_GMANDATA are global
         // S_LDATA32 and S_LMANDATA are local
-        // Managed: S_GMANDATA, S_LMANDATA
-        // For now, we'll assume global=true and managed=false (conservative default)
-        // TODO: Pass SymKind to distinguish between these variants
+        // TODO: Implement is_managed detection (S_GMANDATA, S_LMANDATA)
 
         let data = Data {
             name: sym.name.to_string(),
-            is_global: true, // Conservative default
-            is_managed: false, // Conservative default
+            is_global: true, // Set by handle_symbol() based on SymKind
+            is_managed: false, // TODO: Detect managed symbols
             ty,
             offset,
         };
@@ -469,8 +556,8 @@ impl
             type_index: type_index.0,
             address,
             len: sym.fixed.proc_len.get() as usize,
-            is_global: true, // TODO: Determine from SymKind (S_GPROC32 vs S_LPROC32)
-            is_dpc: false, // TODO: Determine from SymKind (S_LPROC32_DPC)
+            is_global: true, // Set by handle_symbol() based on SymKind
+            is_dpc: false,   // Set by handle_symbol() based on SymKind
             prologue_end: sym.fixed.debug_start.get() as usize,
             epilogue_start: sym.fixed.debug_end.get() as usize,
         }

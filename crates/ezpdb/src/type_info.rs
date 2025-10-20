@@ -107,21 +107,24 @@ pub struct TypeProperties {
 impl TryFrom<ms_pdb::codeview::types::UdtProperties> for TypeProperties {
     type Error = Error;
     fn try_from(props: ms_pdb::codeview::types::UdtProperties) -> Result<Self, Self::Error> {
+        // Use catch_unwind for each bitfield access to handle potential overflow panics
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        
         Ok(TypeProperties {
-            packed: props.packed(),
-            constructors: props.ctor(),
-            overlapped_operators: props.ovlops(),
-            is_nested_type: props.isnested(),
-            contains_nested_types: props.cnested(),
-            overload_assignment: props.opassign(),
-            overload_coasting: props.opcast(),
-            forward_reference: props.fwdref(),
-            scoped_definition: props.scoped(),
-            has_unique_name: props.hasuniquename(),
-            sealed: props.sealed(),
-            hfa: props.hfa() as u8,  // Cast u16 to u8
-            intristic_type: props.intrinsic(),
-            mocom: props.mocom() as u8,  // Cast bool to u8
+            packed: catch_unwind(AssertUnwindSafe(|| props.packed())).unwrap_or(false),
+            constructors: catch_unwind(AssertUnwindSafe(|| props.ctor())).unwrap_or(false),
+            overlapped_operators: catch_unwind(AssertUnwindSafe(|| props.ovlops())).unwrap_or(false),
+            is_nested_type: catch_unwind(AssertUnwindSafe(|| props.isnested())).unwrap_or(false),
+            contains_nested_types: catch_unwind(AssertUnwindSafe(|| props.cnested())).unwrap_or(false),
+            overload_assignment: catch_unwind(AssertUnwindSafe(|| props.opassign())).unwrap_or(false),
+            overload_coasting: catch_unwind(AssertUnwindSafe(|| props.opcast())).unwrap_or(false),
+            forward_reference: catch_unwind(AssertUnwindSafe(|| props.fwdref())).unwrap_or(false),
+            scoped_definition: catch_unwind(AssertUnwindSafe(|| props.scoped())).unwrap_or(false),
+            has_unique_name: catch_unwind(AssertUnwindSafe(|| props.hasuniquename())).unwrap_or(false),
+            sealed: catch_unwind(AssertUnwindSafe(|| props.sealed())).unwrap_or(false),
+            hfa: catch_unwind(AssertUnwindSafe(|| props.hfa() as u8)).unwrap_or(0),
+            intristic_type: catch_unwind(AssertUnwindSafe(|| props.intrinsic())).unwrap_or(false),
+            mocom: catch_unwind(AssertUnwindSafe(|| props.mocom() as u8)).unwrap_or(0),
         })
     }
 }
@@ -195,8 +198,7 @@ impl TryFrom<FromClass<'_, '_>> for Class {
         };
 
         let derived_from = if derived_from.0 != 0 {
-            Some(crate::handle_type(derived_from, output_pdb, type_stream)
-                .expect("failed to resolve dependent type"))
+            Some(crate::handle_type(derived_from, output_pdb, type_stream)?)
         } else {
             None
         };
@@ -572,6 +574,19 @@ impl TryFrom<FromPointer<'_, '_>> for Pointer {
         let underlying_type = crate::handle_type(pointer.fixed.ty.get(), output_pdb, type_stream).ok();
         let attr = pointer.fixed.attr();
 
+        // Try to extract size, but use a safe fallback if bitfield access panics
+        let size = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            attr.size() as usize
+        })).unwrap_or_else(|_| {
+            // If bitfield access panics, infer size from pointer kind
+            match attr.pointer_kind() {
+                0 | 1 | 2 => 2,     // Near16, Far16, Huge16
+                10 | 11 => 4,       // Near32, Far32
+                12 => 8,            // Ptr64
+                _ => 8,             // default to 64-bit
+            }
+        });
+
         Ok(Pointer {
             underlying_type,
             attributes: PointerAttributes {
@@ -596,7 +611,7 @@ impl TryFrom<FromPointer<'_, '_>> for Pointer {
                 is_unaligned: attr.unaligned(),
                 is_restrict: attr.restrict(),
                 is_reference: attr.islref() || attr.isrref(),
-                size: attr.size() as usize,
+                size,
                 is_mocom: attr.ismocom(),
             },
         })
@@ -951,12 +966,58 @@ type FromFieldList<'a, 'b> = (
 impl TryFrom<FromFieldList<'_, '_>> for FieldList {
     type Error = Error;
     fn try_from(data: FromFieldList<'_, '_>) -> Result<Self, Self::Error> {
-        let (_field_list, _type_stream, _output_pdb) = data;
+        let (field_list, type_stream, output_pdb) = data;
 
-        // TODO: Properly iterate and convert field list items
-        // The challenge is handling mutable borrow of output_pdb in closure
-        // For now, return empty list
-        Ok(FieldList(Vec::new()))
+        let mut fields = Vec::new();
+        
+        // Iterate through all fields in the field list
+        for field in field_list.iter() {
+            match field {
+                ms_pdb::codeview::types::fields::Field::Member(member) => {
+                    let member_type = crate::handle_type(member.ty, output_pdb, type_stream)?;
+                    fields.push(member_type);
+                }
+                ms_pdb::codeview::types::fields::Field::StaticMember(static_member) => {
+                    let member_type = crate::handle_type(static_member.ty, output_pdb, type_stream)?;
+                    fields.push(member_type);
+                }
+                ms_pdb::codeview::types::fields::Field::BaseClass(base_class) => {
+                    let base_type = crate::handle_type(base_class.ty, output_pdb, type_stream)?;
+                    fields.push(base_type);
+                }
+                ms_pdb::codeview::types::fields::Field::DirectVirtualBaseClass(vbase) => {
+                    let base_type = crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream)?;
+                    fields.push(base_type);
+                }
+                ms_pdb::codeview::types::fields::Field::IndirectVirtualBaseClass(vbase) => {
+                    let base_type = crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream)?;
+                    fields.push(base_type);
+                }
+                ms_pdb::codeview::types::fields::Field::NestedType(nested) => {
+                    let nested_type = crate::handle_type(nested.nested_ty, output_pdb, type_stream)?;
+                    fields.push(nested_type);
+                }
+                ms_pdb::codeview::types::fields::Field::OneMethod(_method) => {
+                    // Methods don't have a separate type, but we could create a placeholder
+                    // For now, skip methods as they're not data fields
+                }
+                ms_pdb::codeview::types::fields::Field::Method(_method) => {
+                    // Skip method lists for now
+                }
+                ms_pdb::codeview::types::fields::Field::Enumerate(_enumerate) => {
+                    // Enumerates are values, not types, so skip them
+                }
+                ms_pdb::codeview::types::fields::Field::VFuncTable(vtable_type) => {
+                    let vtable = crate::handle_type(vtable_type, output_pdb, type_stream)?;
+                    fields.push(vtable);
+                }
+                _ => {
+                    // Skip unknown field types
+                }
+            }
+        }
+
+        Ok(FieldList(fields))
     }
 }
 
@@ -1317,8 +1378,7 @@ impl TryFrom<FromStaticMember<'_, '_>> for StaticMember {
     fn try_from(data: FromStaticMember<'_, '_>) -> Result<Self, Self::Error> {
         let (member, type_stream, output_pdb) = data;
 
-        let field_type = crate::handle_type(member.ty, output_pdb, type_stream)
-            .expect("failed to parse dependent type");
+        let field_type = crate::handle_type(member.ty, output_pdb, type_stream)?;
 
         Ok(StaticMember {
             name: member.name.to_string(),
@@ -1329,7 +1389,7 @@ impl TryFrom<FromStaticMember<'_, '_>> for StaticMember {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
-pub struct VTable(TypeRef);
+pub struct VTable(pub TypeRef);
 
 // NOTE: ms-pdb doesn't have a separate VirtualFunctionTablePointerType
 // VFuncTable field in FieldList enum represents this
@@ -1345,8 +1405,7 @@ impl TryFrom<FromVirtualFunctionTablePointer<'_, '_>> for VTable {
     fn try_from(data: FromVirtualFunctionTablePointer<'_, '_>) -> Result<Self, Self::Error> {
         let (table_index, type_stream, output_pdb) = data;
 
-        let vtable_type = crate::handle_type(table_index, output_pdb, type_stream)
-            .expect("failed to parse dependent type");
+        let vtable_type = crate::handle_type(table_index, output_pdb, type_stream)?;
 
         Ok(VTable(vtable_type))
     }
