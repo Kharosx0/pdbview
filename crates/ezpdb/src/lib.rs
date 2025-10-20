@@ -121,21 +121,47 @@ pub fn parse_pdb<P: AsRef<Path>>(
               output_pdb.types.len(), primitive_skipped, parse_errors);
     
 
-
-    // NOTE: IPI (ID Program Information) stream parsing is DISABLED
-    // 
-    // Problem: IPI stream uses the same TypeIndex numbering as TPI (both start at 4096),
-    // which causes IPI types to overwrite TPI types in the HashMap. For example:
-    // - TypeIndex 6219 in TPI = _KPROCESS struct with 67 fields ✅
-    // - TypeIndex 6219 in IPI = FuncId that overwrites the struct ❌
-    //
-    // The old pdb crate handles this by having a unified TypeFinder that preferentially
-    // returns TPI types. For now, we only parse TPI types since those contain the struct
-    // definitions we need.
-    //
-    // TODO: Implement proper TPI/IPI type resolution that doesn't overwrite TPI types
-    if let Some(ref _ipi_stream) = ipi_stream {
-        eprintln!("ℹ️  IPI stream available but not parsed (would overwrite TPI types)");
+    // Parse IPI (ID Program Information) stream into separate HashMap
+    // IPI contains FuncId, StringId, BuildInfo, etc. - metadata not in TPI
+    // Store in ipi_types to prevent collision with TPI types (both use same TypeIndex range)
+    if let Some(ref ipi_stream) = ipi_stream {
+        let mut ipi_discovered_types = vec![];
+        let ipi_type_index_begin = ipi_stream.type_index_begin();
+        
+        // Discover all IPI type indices
+        for type_index in ipi_type_index_begin.0..ipi_stream.type_index_end().0 {
+            ipi_discovered_types.push(TypeIndex(type_index));
+        }
+        
+        eprintln!("🔍 Parsing {} IPI types...", ipi_discovered_types.len());
+        
+        let mut ipi_parse_errors = 0;
+        let mut ipi_primitive_skipped = 0;
+        for typ_idx in ipi_discovered_types.iter() {
+            // Skip primitive types
+            if typ_idx.0 < ipi_type_index_begin.0 {
+                ipi_primitive_skipped += 1;
+                continue;
+            }
+            
+            // Parse IPI type and store in ipi_types HashMap
+            let result = handle_ipi_type(*typ_idx, &mut output_pdb, ipi_stream);
+            match result {
+                Ok(_typ) => {},
+                Err(e) => {
+                    ipi_parse_errors += 1;
+                    if ipi_parse_errors <= 10 {
+                        eprintln!("⚠️  Could not parse IPI type {:?}: {}", typ_idx, e);
+                    } else if ipi_parse_errors == 11 {
+                        eprintln!("⚠️  (suppressing further IPI error messages)");
+                    }
+                    continue;
+                }
+            }
+        }
+        
+        eprintln!("🔍 Successfully parsed {} IPI types, {} primitives skipped, {} failed", 
+                  output_pdb.ipi_types.len(), ipi_primitive_skipped, ipi_parse_errors);
     }
 
     // Iterate through all of the parsed types once just to update any necessary info
@@ -292,6 +318,42 @@ pub(crate) fn handle_type(
     Ok(typ)
 }
 
+/// Converts an IPI type index to our internal type representation (stored in ipi_types HashMap)
+pub(crate) fn handle_ipi_type(
+    idx: TypeIndex,
+    output_pdb: &mut ParsedPdb,
+    ipi_stream: &ms_pdb::tpi::TypeStream<Vec<u8>>,
+) -> Result<TypeRef, Error> {
+    // Check if already parsed
+    if let Some(typ) = output_pdb.ipi_types.get(&idx.0) {
+        return Ok(Rc::clone(typ));
+    }
+
+    // Check if this is a primitive type
+    if ipi_stream.is_primitive(idx) {
+        use crate::type_info::{Type, Primitive, PrimitiveKind};
+        let primitive = Primitive {
+            kind: PrimitiveKind::Void,
+            indirection: None,
+        };
+        let typ = Rc::new(RefCell::new(Type::Primitive(primitive)));
+        output_pdb.ipi_types.insert(idx.0, Rc::clone(&typ));
+        return Ok(typ);
+    }
+
+    // Get the type record from the IPI stream
+    let type_record = ipi_stream.record(idx)?;
+    
+    let parsed_type = type_record.parse().map_err(|e| anyhow::anyhow!("Failed to parse IPI type record: {:?}", e))?;
+    
+    // Convert using handle_type_data (same conversion logic, just store in ipi_types)
+    let typ = handle_type_data(&parsed_type, output_pdb, ipi_stream)?;
+
+    output_pdb.ipi_types.insert(idx.0, Rc::clone(&typ));
+
+    Ok(typ)
+}
+
 pub(crate) fn handle_type_data(
     typ: &TypeData,
     output_pdb: &mut ParsedPdb,
@@ -343,6 +405,31 @@ pub(crate) fn handle_type_data(
         TypeData::MethodList(data) => {
             let typ = (data, type_stream, output_pdb).try_into()?;
             Type::MethodList(typ)
+        }
+        // IPI stream types
+        TypeData::FuncId(data) => {
+            let typ = (data, type_stream, output_pdb).try_into()?;
+            Type::FuncId(typ)
+        }
+        TypeData::MFuncId(data) => {
+            let typ = (data, type_stream, output_pdb).try_into()?;
+            Type::MFuncId(typ)
+        }
+        TypeData::StringId(data) => {
+            let typ = (data, type_stream, output_pdb).try_into()?;
+            Type::StringId(typ)
+        }
+        TypeData::SubStrList(data) => {
+            let typ = (data, type_stream, output_pdb).try_into()?;
+            Type::SubStrList(typ)
+        }
+        TypeData::BuildInfo(data) => {
+            let typ = (data, type_stream, output_pdb).try_into()?;
+            Type::BuildInfoType(typ)
+        }
+        TypeData::UdtSrcLine(data) => {
+            let typ = (*data, type_stream, output_pdb).try_into()?;
+            Type::UdtSrcLineType(typ)
         }
         TypeData::Unknown => {
             // Unknown types are not supported by ms-codeview - they represent type kinds

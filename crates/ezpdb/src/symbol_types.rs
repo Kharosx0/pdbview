@@ -18,7 +18,10 @@ pub struct ParsedPdb {
     pub path: PathBuf,
     pub assembly_info: AssemblyInfo,
     pub public_symbols: Vec<PublicSymbol>,
+    /// TPI stream types (structs, unions, enums, etc.)
     pub types: HashMap<TypeIndexNumber, TypeRef>,
+    /// IPI stream types (FuncId, StringId, BuildInfo, etc.)
+    pub ipi_types: HashMap<TypeIndexNumber, TypeRef>,
     pub procedures: Vec<Procedure>,
     pub global_data: Vec<Data>,
     pub debug_modules: Vec<DebugModule>,
@@ -38,6 +41,7 @@ impl ParsedPdb {
             assembly_info: AssemblyInfo::default(),
             public_symbols: vec![],
             types: Default::default(),
+            ipi_types: Default::default(),
             procedures: vec![],
             global_data: vec![],
             debug_modules: vec![],
@@ -223,21 +227,37 @@ impl TryFrom<(&ms_pdb::codeview::syms::BuildInfo, &ms_pdb::tpi::TypeStream<Vec<u
         let (symbol, ipi_stream) = info;
         
         // BuildInfo.item is an ItemId pointing to an LF_BUILDINFO record in IPI stream
-        // Try to read the IPI record
         let type_index = ms_pdb::codeview::types::TypeIndex(symbol.item);
-        let arguments = if let Ok(type_record) = ipi_stream.record(type_index) {
-            // Try to parse the record to extract build info strings
-            // LF_BUILDINFO typically contains: current directory, compiler path, source file, PDB path, command line
-            // Since LF_BUILDINFO isn't fully implemented in ms-pdb yet, we'll try to extract what we can
+        let mut arguments = Vec::new();
+        
+        if let Ok(type_record) = ipi_stream.record(type_index) {
+            // Parse the LF_BUILDINFO record
             match type_record.parse() {
-                Ok(type_data) => {
-                    vec![format!("{:?}", type_data)]
+                Ok(ms_pdb::codeview::types::TypeData::BuildInfo(build_info_data)) => {
+                    // BuildInfo contains TypeIndex references to StringId records
+                    // Each StringId contains the actual string (current dir, compiler, source, pdb, cmdline)
+                    for arg_idx in build_info_data.args.iter() {
+                        let arg_type_index = ms_pdb::codeview::types::TypeIndex(arg_idx.get());
+                        if arg_type_index.0 == 0 {
+                            continue;
+                        }
+                        
+                        if let Ok(arg_record) = ipi_stream.record(arg_type_index) {
+                            if let Ok(ms_pdb::codeview::types::TypeData::StringId(string_id)) = arg_record.parse() {
+                                arguments.push(string_id.name.to_string());
+                            }
+                        }
+                    }
                 }
-                Err(_) => Vec::new(),
+                Ok(other) => {
+                    // Unexpected type - store debug representation
+                    arguments.push(format!("{:?}", other));
+                }
+                Err(e) => {
+                    warn!("Failed to parse BuildInfo type record: {}", e);
+                }
             }
-        } else {
-            Vec::new()
-        };
+        }
         
         Ok(BuildInfo {
             arguments,

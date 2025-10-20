@@ -41,6 +41,13 @@ pub enum Type {
     StaticMember(StaticMember),
     BaseClass(BaseClass),
     VTable(VTable),
+    // IPI stream types
+    FuncId(FuncIdType),
+    MFuncId(MFuncIdType),
+    StringId(StringIdType),
+    SubStrList(SubStrListType),
+    BuildInfoType(BuildInfoTypeData),
+    UdtSrcLineType(UdtSrcLineType),
 }
 
 impl Typed for Type {
@@ -72,6 +79,13 @@ impl Typed for Type {
             Type::StaticMember(_) => panic!("type_size() invoked for StaticMember"),
             Type::VTable(_) => panic!("type_size() invoked for VTable"),
             Type::BaseClass(_) => panic!("type_size() invoked for BaseClass"),
+            // IPI types don't have a size
+            Type::FuncId(_) => panic!("type_size() invoked for FuncId"),
+            Type::MFuncId(_) => panic!("type_size() invoked for MFuncId"),
+            Type::StringId(_) => panic!("type_size() invoked for StringId"),
+            Type::SubStrList(_) => panic!("type_size() invoked for SubStrList"),
+            Type::BuildInfoType(_) => panic!("type_size() invoked for BuildInfoType"),
+            Type::UdtSrcLineType(_) => panic!("type_size() invoked for UdtSrcLineType"),
         }
     }
 
@@ -1408,5 +1422,213 @@ impl TryFrom<FromVirtualFunctionTablePointer<'_, '_>> for VTable {
         let vtable_type = crate::handle_type(table_index, output_pdb, type_stream)?;
 
         Ok(VTable(vtable_type))
+    }
+}
+
+// ============================================================================
+// IPI Stream Types
+// ============================================================================
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+pub struct FuncIdType {
+    pub name: String,
+    pub function_type: Option<TypeRef>,
+    pub parent_scope: Option<TypeRef>,
+}
+
+type FromFuncId<'a, 'b> = (
+    &'b ms_pdb::codeview::types::FuncId<'a>,
+    &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
+    &'b mut crate::symbol_types::ParsedPdb,
+);
+
+impl TryFrom<FromFuncId<'_, '_>> for FuncIdType {
+    type Error = Error;
+    fn try_from(data: FromFuncId<'_, '_>) -> Result<Self, Self::Error> {
+        let (func_id, type_stream, output_pdb) = data;
+        
+        let function_type = if func_id.fixed.func_type.get().0 != 0 {
+            Some(crate::handle_type(func_id.fixed.func_type.get(), output_pdb, type_stream)?)
+        } else {
+            None
+        };
+        
+        let parent_scope = if func_id.fixed.scope.get() != 0 {
+            Some(crate::handle_type(ms_pdb::codeview::types::TypeIndex(func_id.fixed.scope.get()), output_pdb, type_stream)?)
+        } else {
+            None
+        };
+        
+        Ok(FuncIdType {
+            name: func_id.name.to_string(),
+            function_type,
+            parent_scope,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+pub struct MFuncIdType {
+    pub name: String,
+    pub function_type: Option<TypeRef>,
+    pub parent_type: Option<TypeRef>,
+}
+
+type FromMFuncId<'a, 'b> = (
+    &'b ms_pdb::codeview::types::MFuncId<'a>,
+    &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
+    &'b mut crate::symbol_types::ParsedPdb,
+);
+
+impl TryFrom<FromMFuncId<'_, '_>> for MFuncIdType {
+    type Error = Error;
+    fn try_from(data: FromMFuncId<'_, '_>) -> Result<Self, Self::Error> {
+        let (mfunc_id, type_stream, output_pdb) = data;
+        
+        let function_type = if mfunc_id.fixed.func_type.get().0 != 0 {
+            Some(crate::handle_type(mfunc_id.fixed.func_type.get(), output_pdb, type_stream)?)
+        } else {
+            None
+        };
+        
+        let parent_type = if mfunc_id.fixed.parent_type.get().0 != 0 {
+            Some(crate::handle_type(mfunc_id.fixed.parent_type.get(), output_pdb, type_stream)?)
+        } else {
+            None
+        };
+        
+        Ok(MFuncIdType {
+            name: mfunc_id.name.to_string(),
+            function_type,
+            parent_type,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+pub struct StringIdType {
+    pub id: String,
+    pub substring: Option<TypeRef>,
+}
+
+type FromStringId<'a, 'b> = (
+    &'b ms_pdb::codeview::types::StringId<'a>,
+    &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
+    &'b mut crate::symbol_types::ParsedPdb,
+);
+
+impl TryFrom<FromStringId<'_, '_>> for StringIdType {
+    type Error = Error;
+    fn try_from(data: FromStringId<'_, '_>) -> Result<Self, Self::Error> {
+        let (string_id, type_stream, output_pdb) = data;
+        
+        let substring = if string_id.id != 0 {
+            Some(crate::handle_type(ms_pdb::codeview::types::TypeIndex(string_id.id), output_pdb, type_stream)?)
+        } else {
+            None
+        };
+        
+        Ok(StringIdType {
+            id: string_id.name.to_string(),
+            substring,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+pub struct SubStrListType {
+    pub strings: Vec<TypeRef>,
+}
+
+type FromSubStrList<'a, 'b> = (
+    &'b ms_pdb::codeview::types::SubStrList<'a>,
+    &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
+    &'b mut crate::symbol_types::ParsedPdb,
+);
+
+impl TryFrom<FromSubStrList<'_, '_>> for SubStrListType {
+    type Error = Error;
+    fn try_from(data: FromSubStrList<'_, '_>) -> Result<Self, Self::Error> {
+        let (substr_list, type_stream, output_pdb) = data;
+        
+        let strings: Result<Vec<TypeRef>, Error> = substr_list
+            .ids
+            .iter()
+            .map(|id| id.get())
+            .filter(|id| *id != 0)
+            .map(|id| crate::handle_type(ms_pdb::codeview::types::TypeIndex(id), output_pdb, type_stream))
+            .collect();
+        
+        Ok(SubStrListType {
+            strings: strings?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+pub struct BuildInfoTypeData {
+    pub items: Vec<TypeRef>,
+}
+
+type FromBuildInfo<'a, 'b> = (
+    &'b ms_pdb::codeview::types::BuildInfo<'a>,
+    &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
+    &'b mut crate::symbol_types::ParsedPdb,
+);
+
+impl TryFrom<FromBuildInfo<'_, '_>> for BuildInfoTypeData {
+    type Error = Error;
+    fn try_from(data: FromBuildInfo<'_, '_>) -> Result<Self, Self::Error> {
+        let (build_info, type_stream, output_pdb) = data;
+        
+        let items: Result<Vec<TypeRef>, Error> = build_info
+            .args
+            .iter()
+            .map(|id| id.get())
+            .filter(|id| *id != 0)
+            .map(|id| crate::handle_type(ms_pdb::codeview::types::TypeIndex(id), output_pdb, type_stream))
+            .collect();
+        
+        Ok(BuildInfoTypeData {
+            items: items?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+pub struct UdtSrcLineType {
+    pub source_file: Option<TypeRef>,
+    pub line_number: u32,
+    pub udt: TypeRef,
+}
+
+type FromUdtSrcLine<'a, 'b> = (
+    &'b ms_pdb::codeview::types::UdtSrcLine,
+    &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
+    &'b mut crate::symbol_types::ParsedPdb,
+);
+
+impl TryFrom<FromUdtSrcLine<'_, '_>> for UdtSrcLineType {
+    type Error = Error;
+    fn try_from(data: FromUdtSrcLine<'_, '_>) -> Result<Self, Self::Error> {
+        let (udt_src_line, type_stream, output_pdb) = data;
+        
+        // src is a NameIndex, not a TypeIndex - it references the /names stream, not type stream
+        // For now, we'll skip the source file lookup and just store the UDT type
+        let source_file = None;
+        
+        let udt = crate::handle_type(udt_src_line.ty.get(), output_pdb, type_stream)?;
+        
+        Ok(UdtSrcLineType {
+            source_file,
+            line_number: udt_src_line.line.get(),
+            udt,
+        })
     }
 }
