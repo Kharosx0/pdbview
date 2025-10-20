@@ -76,23 +76,66 @@ pub fn parse_pdb<P: AsRef<Path>>(
     // upon type information, but not vice versa
     let type_stream = pdb.read_type_stream()?;
     let type_index_begin = type_stream.type_index_begin();
-    let _type_index_end = type_stream.type_index_end();
+    let type_index_end = type_stream.type_index_end();
+    
+    eprintln!("🔍 Type stream range: {} to {} ({} types expected)", 
+           type_index_begin.0, type_index_end.0, type_index_end.0 - type_index_begin.0);
     
     let mut discovered_types = vec![];
+    let mut current_index = type_index_begin.0;
     for _type_record in type_stream.iter_type_records() {
-        let type_index = TypeIndex(type_index_begin.0 + discovered_types.len() as u32);
+        let type_index = TypeIndex(current_index);
         discovered_types.push(type_index);
+        current_index += 1;
     }
+    
+    eprintln!("🔍 Actually iterated {} type records (expected {})", 
+          discovered_types.len(), type_index_end.0 - type_index_begin.0);
 
+    let mut parse_errors = 0;
+    let mut primitive_skipped = 0;
     for typ_idx in discovered_types.iter() {
+        // Skip primitive types (< type_index_begin) - these are built-in types like int, char, etc.
+        // ms-pdb will error if we try to get a record for these
+        if typ_idx.0 < type_index_begin.0 {
+            primitive_skipped += 1;
+            continue;
+        }
+        
         let _typ = match handle_type(*typ_idx, &mut output_pdb, &type_stream) {
             Ok(typ) => typ,
             Err(e) => {
-                // Log but continue - some types may be unimplemented
-                warn!("Could not parse type {:?}: {}", typ_idx, e);
+                // Log errors
+                parse_errors += 1;
+                if parse_errors <= 10 || typ_idx.0 == 6219 {
+                    eprintln!("⚠️  Could not parse type {:?}: {}", typ_idx, e);
+                } else if parse_errors == 11 {
+                    eprintln!("⚠️  (suppressing further error messages, total will be shown at end)");
+                }
                 continue;
             }
         };
+    }
+    
+    eprintln!("🔍 Successfully parsed {} types, {} primitives skipped, {} failed", 
+              output_pdb.types.len(), primitive_skipped, parse_errors);
+    
+
+
+    // NOTE: IPI (ID Program Information) stream parsing is DISABLED
+    // 
+    // Problem: IPI stream uses the same TypeIndex numbering as TPI (both start at 4096),
+    // which causes IPI types to overwrite TPI types in the HashMap. For example:
+    // - TypeIndex 6219 in TPI = _KPROCESS struct with 67 fields ✅
+    // - TypeIndex 6219 in IPI = FuncId that overwrites the struct ❌
+    //
+    // The old pdb crate handles this by having a unified TypeFinder that preferentially
+    // returns TPI types. For now, we only parse TPI types since those contain the struct
+    // definitions we need.
+    //
+    // TODO: Implement proper TPI/IPI type resolution that doesn't overwrite TPI types
+    if let Some(ref _ipi_stream) = ipi_stream {
+        eprintln!("ℹ️  IPI stream available but not parsed (would overwrite TPI types)");
     }
 
     // Iterate through all of the parsed types once just to update any necessary info
@@ -223,9 +266,25 @@ pub(crate) fn handle_type(
         return Ok(Rc::clone(typ));
     }
 
+    // Check if this is a primitive type (built-in type like int, char, etc.)
+    if type_stream.is_primitive(idx) {
+        // For primitive types, we create a simple placeholder type
+        // TODO: Properly decode primitive type information from TypeIndex encoding
+        use crate::type_info::{Type, Primitive, PrimitiveKind};
+        let primitive = Primitive {
+            kind: PrimitiveKind::Void,  // Placeholder - should decode from idx
+            indirection: None,
+        };
+        let typ = Rc::new(RefCell::new(Type::Primitive(primitive)));
+        output_pdb.types.insert(idx.0, Rc::clone(&typ));
+        return Ok(typ);
+    }
+
     // Get the type record from the stream
     let type_record = type_stream.record(idx)?;
+    
     let parsed_type = type_record.parse().map_err(|e| anyhow::anyhow!("Failed to parse type record: {:?}", e))?;
+    
     let typ = handle_type_data(&parsed_type, output_pdb, type_stream)?;
 
     output_pdb.types.insert(idx.0, Rc::clone(&typ));
@@ -285,8 +344,19 @@ pub(crate) fn handle_type_data(
             let typ = (data, type_stream, output_pdb).try_into()?;
             Type::MethodList(typ)
         }
+        TypeData::Unknown => {
+            // Unknown types are not supported by ms-codeview - they represent type kinds
+            // that the library doesn't recognize. Create a placeholder.
+            warn!("Encountered Unknown type - creating placeholder");
+            use crate::type_info::{Primitive, PrimitiveKind};
+            let primitive = Primitive {
+                kind: PrimitiveKind::Void,
+                indirection: None,
+            };
+            Type::Primitive(primitive)
+        }
         _ => {
-            warn!("Unhandled type: {:?}", typ);
+            warn!("Unhandled type variant: {:?}", typ);
             // Return a placeholder for unhandled types
             return Err(Error::UnhandledType(format!("{:?}", typ)));
         }

@@ -63,14 +63,35 @@ fn test_parse_ntkrnl_pdb() {
                             kprocess_type_index = Some(*type_idx);
                             
                             // Print first few fields
-                            println!("  First 5 fields:");
-                            for (i, field) in class.fields.iter().take(5).enumerate() {
+                            println!("  First 10 fields:");
+                            for (i, field) in class.fields.iter().take(10).enumerate() {
                                 if let Ok(field_borrow) = field.try_borrow() {
+                                    use ezpdb::type_info::Type;
                                     match &*field_borrow {
-                                        ezpdb::type_info::Type::Member(member) => {
-                                            println!("    [{}] {} at offset {}", i, member.name, member.offset);
+                                        Type::Member(member) => {
+                                            println!("    [{}] {} at offset 0x{:x}", i, member.name, member.offset);
                                         }
-                                        _ => {}
+                                        Type::BaseClass(bc) => {
+                                            println!("    [{}] <BaseClass at offset 0x{:x}>", i, bc.offset);
+                                        }
+                                        Type::VirtualBaseClass(vbc) => {
+                                            println!("    [{}] <VirtualBaseClass>", i);
+                                        }
+                                        Type::StaticMember(sm) => {
+                                            println!("    [{}] static {} ", i, sm.name);
+                                        }
+                                        Type::Nested(n) => {
+                                            println!("    [{}] <Nested>", i);
+                                        }
+                                        Type::Method(m) => {
+                                            println!("    [{}] method {} ", i, m.name);
+                                        }
+                                        Type::OverloadedMethod(om) => {
+                                            println!("    [{}] overloaded method {}", i, om.name);
+                                        }
+                                        other => {
+                                            println!("    [{}] <unexpected field type: {:?}>", i, std::mem::discriminant(other));
+                                        }
                                     }
                                 }
                             }
