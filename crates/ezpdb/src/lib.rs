@@ -1,6 +1,6 @@
 use crate::error::Error;
 use crate::symbol_types::*;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use ms_pdb::{
     codeview::{
         syms::{Sym, SymData},
@@ -10,10 +10,12 @@ use ms_pdb::{
     Pdb, Stream,
 };
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::{Mutex, OnceLock};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub mod error;
@@ -21,6 +23,29 @@ pub mod symbol_types;
 pub mod type_info;
 
 pub use crate::symbol_types::ParsedPdb;
+
+/// Represents a symbol stream that can be iterated
+enum SymbolStream<'a> {
+    /// Global symbol stream (GSS) - contains public symbols and data symbols
+    Global(&'a ms_pdb::globals::gss::GlobalSymbolStream),
+    /// Module symbol stream - contains module-specific symbols
+    Module(&'a ms_pdb::modi::ModiStreamData<ms_pdb::StreamData>),
+}
+
+impl<'a> SymbolStream<'a> {
+    /// Returns true if this is a global symbol stream
+    fn is_global(&self) -> bool {
+        matches!(self, SymbolStream::Global(_))
+    }
+
+    /// Iterator over symbols in the stream
+    fn iter_syms(&self) -> Box<dyn Iterator<Item = Sym<'a>> + 'a> {
+        match self {
+            SymbolStream::Global(gss) => Box::new(gss.iter_syms()),
+            SymbolStream::Module(modi) => Box::new(modi.iter_syms()),
+        }
+    }
+}
 
 // Helper function to convert version
 fn convert_version(version: u32) -> Version {
@@ -49,13 +74,22 @@ struct ImageSectionHeader {
     characteristics: u32,
 }
 
-/// Converts a section:offset pair to an RVA (Relative Virtual Address).
-///
-/// This reads the IMAGE_SECTION_HEADER structures from the PDB's optional debug header
-/// (stream index 5, `section_header_data`) to map section-relative offsets to RVAs.
-///
-/// Section indices in PDB symbols are 1-based.
-fn section_offset_to_rva(pdb: &Pdb, section: u16, offset: u32) -> Option<usize> {
+/// Cached section headers for a PDB, keyed by GUID.
+/// This avoids re-reading the DBI stream for every symbol.
+type SectionHeaderCache = HashMap<uuid::Uuid, Vec<ImageSectionHeader>>;
+
+/// Global cache of section headers by PDB GUID.
+/// Using OnceLock + Mutex for thread-safe lazy initialization.
+static SECTION_HEADER_CACHE: OnceLock<Mutex<SectionHeaderCache>> = OnceLock::new();
+
+/// Gets or initializes the global section header cache.
+fn get_section_header_cache() -> &'static Mutex<SectionHeaderCache> {
+    SECTION_HEADER_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Reads section headers from a PDB file.
+/// This is an internal helper that does the actual I/O.
+fn read_section_headers_from_pdb(pdb: &Pdb) -> Option<Vec<ImageSectionHeader>> {
     // Read the DBI stream
     let dbi_data = pdb.read_stream_to_vec(Stream::DBI.into()).ok()?;
     let dbi = DbiStream::parse(dbi_data).ok()?;
@@ -72,13 +106,62 @@ fn section_offset_to_rva(pdb: &Pdb, section: u16, offset: u32) -> Option<usize> 
     // Parse as an array of IMAGE_SECTION_HEADER structures
     let section_headers = <[ImageSectionHeader]>::ref_from_bytes(&section_headers_data).ok()?;
 
+    // Clone into a Vec for caching
+    Some(section_headers.to_vec())
+}
+
+/// Gets section headers for a PDB, using cache if available.
+///
+/// This function checks the global cache first. If headers for this PDB's GUID
+/// are not cached, it reads them from the PDB and caches them for future use.
+fn get_section_headers(pdb: &Pdb, guid: uuid::Uuid) -> Option<Vec<ImageSectionHeader>> {
+    let cache = get_section_header_cache();
+
+    // Try to get from cache first
+    {
+        let cache_guard = cache.lock().ok()?;
+        if let Some(headers) = cache_guard.get(&guid) {
+            return Some(headers.clone());
+        }
+    }
+
+    // Not in cache, read from PDB
+    let headers = read_section_headers_from_pdb(pdb)?;
+
+    // Store in cache
+    {
+        let mut cache_guard = cache.lock().ok()?;
+        cache_guard.insert(guid, headers.clone());
+    }
+
+    Some(headers)
+}
+
+/// Converts a section:offset pair to an RVA (Relative Virtual Address).
+///
+/// This reads the IMAGE_SECTION_HEADER structures from the PDB's optional debug header
+/// (stream index 5, `section_header_data`) to map section-relative offsets to RVAs.
+///
+/// Section headers are cached globally by PDB GUID to avoid re-reading the DBI stream
+/// for every symbol conversion.
+///
+/// Section indices in PDB symbols are 1-based.
+fn section_offset_to_rva(pdb: &Pdb, guid: uuid::Uuid, section: u16, offset: u32) -> Option<usize> {
+    // Get section headers from cache or read from PDB
+    let section_headers = get_section_headers(pdb, guid)?;
+
     // Section indices are 1-based in PDB symbols
     if section == 0 || section as usize > section_headers.len() {
         return None;
     }
 
     let section_header = &section_headers[section as usize - 1];
-    Some((section_header.virtual_address + offset) as usize)
+
+    // Use checked_add to avoid overflow
+    section_header
+        .virtual_address
+        .checked_add(offset)
+        .map(|rva| rva as usize)
 }
 
 /// Decodes a primitive TypeIndex into a Primitive type
@@ -317,20 +400,16 @@ pub fn parse_pdb<P: AsRef<Path>>(
     }
 
     debug!("grabbing public symbols");
-    // Parse public symbols
+    // Parse public symbols from global symbol stream
     let gss = pdb.read_gss()?;
-    for sym in gss.iter_syms() {
-        if let Err(e) = handle_symbol(
-            &pdb,
-            sym,
-            &mut output_pdb,
-            &type_stream,
-            ipi_stream.as_ref(),
-            base_address,
-        ) {
-            warn!("Error handling symbol: {}", e);
-        }
-    }
+    handle_symbols_for_stream(
+        &pdb,
+        SymbolStream::Global(&gss),
+        &mut output_pdb,
+        &type_stream,
+        ipi_stream.as_ref(),
+        base_address,
+    )?;
 
     debug!("grabbing debug modules");
     // Parse private symbols from modules
@@ -360,25 +439,49 @@ pub fn parse_pdb<P: AsRef<Path>>(
                 String::from_utf8_lossy(module_name)
             );
 
-            for sym in modi_stream.iter_syms() {
-                if let Err(e) = handle_symbol(
-                    &pdb,
-                    sym,
-                    &mut output_pdb,
-                    &type_stream,
-                    ipi_stream.as_ref(),
-                    base_address,
-                ) {
-                    warn!("Error handling symbol in module: {}", e);
-                }
-            }
+            handle_symbols_for_stream(
+                &pdb,
+                SymbolStream::Module(&modi_stream),
+                &mut output_pdb,
+                &type_stream,
+                ipi_stream.as_ref(),
+                base_address,
+            )?;
         }
     }
 
     Ok(output_pdb)
 }
 
-/// Helper to convert symbol data to parsed representation
+/// Process all symbols from a symbol stream (global or module)
+fn handle_symbols_for_stream<'a>(
+    pdb: &Pdb,
+    stream: SymbolStream<'a>,
+    output_pdb: &mut ParsedPdb,
+    type_stream: &ms_pdb::tpi::TypeStream<Vec<u8>>,
+    ipi_stream: Option<&ms_pdb::tpi::TypeStream<Vec<u8>>>,
+    base_address: Option<usize>,
+) -> Result<(), Error> {
+    let is_global = stream.is_global();
+
+    for sym in stream.iter_syms() {
+        if let Err(e) = handle_symbol(
+            pdb,
+            sym,
+            output_pdb,
+            type_stream,
+            ipi_stream,
+            base_address,
+            is_global,
+        ) {
+            warn!("Error handling symbol: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+/// Helper to convert a single symbol to parsed representation
 fn handle_symbol<'a>(
     pdb: &Pdb,
     sym: Sym<'a>,
@@ -386,7 +489,11 @@ fn handle_symbol<'a>(
     type_stream: &ms_pdb::tpi::TypeStream<Vec<u8>>,
     ipi_stream: Option<&ms_pdb::tpi::TypeStream<Vec<u8>>>,
     base_address: Option<usize>,
+    is_global_stream: bool,
 ) -> Result<(), Error> {
+    // Extract the GUID for RVA conversion caching
+    let guid = pdb.pdbi().binding_key().guid;
+
     // Parse the symbol
     let sym_data = match sym.parse() {
         Ok(data) => data,
@@ -396,11 +503,38 @@ fn handle_symbol<'a>(
         }
     };
 
+    // Track the 8 missing symbols for detailed logging
+    let missing_symbols = [
+        "LdrpForkConditionVariable",
+        "EtwpRegistrationTable",
+        "LdrpRedirectionTree",
+        "LdrpRetryingModuleIndex",
+        "EtwpGuidEntryTable",
+        "LdrpMappingInfoIndex",
+        "LdrpModuleBaseAddressIndex",
+        "RtlpPtrTree",
+    ];
+
     match sym_data {
         SymData::Pub(data) => {
             debug!("public symbol: {:?}", data);
             let converted_symbol: crate::symbol_types::PublicSymbol =
-                (pdb, &data, base_address, type_stream).into();
+                (pdb, guid, &data, base_address, type_stream).into();
+
+            // Check if this is one of the missing symbols
+            let sym_name = String::from_utf8_lossy(data.name);
+            if missing_symbols.contains(&sym_name.as_ref()) {
+                let flags = data.fixed.flags.get();
+                info!(
+                    "NEW PDB - Public symbol (one of 8 missing): name={}, flags={:#x}, is_function={}, is_code={}, offset={:?}",
+                    sym_name,
+                    flags,
+                    converted_symbol.is_function,
+                    converted_symbol.is_code,
+                    converted_symbol.offset
+                );
+            }
+
             output_pdb.public_symbols.push(converted_symbol);
         }
         SymData::Proc(data) => {
@@ -408,7 +542,7 @@ fn handle_symbol<'a>(
             let is_global = matches!(sym.kind, ms_pdb::codeview::syms::SymKind::S_GPROC32);
             let is_dpc = matches!(sym.kind, ms_pdb::codeview::syms::SymKind::S_LPROC32_DPC);
             let mut converted_symbol: crate::symbol_types::Procedure =
-                (pdb, &data, base_address, type_stream).into();
+                (pdb, guid, &data, base_address, type_stream).into();
             converted_symbol.is_global = is_global;
             converted_symbol.is_dpc = is_dpc;
             output_pdb.procedures.push(converted_symbol);
@@ -432,16 +566,34 @@ fn handle_symbol<'a>(
                 ms_pdb::codeview::syms::SymKind::S_GMANDATA
                     | ms_pdb::codeview::syms::SymKind::S_LMANDATA
             );
-            let mut sym: crate::symbol_types::Data =
-                (pdb, &data, base_address, type_stream, &output_pdb.types).try_into()?;
-            sym.is_global = is_global;
-            sym.is_managed = is_managed;
-            if sym.is_global {
-                output_pdb.global_data.push(sym);
+            let mut sym_data: crate::symbol_types::Data = (
+                pdb,
+                guid,
+                &data,
+                base_address,
+                type_stream,
+                &output_pdb.types,
+            )
+                .try_into()?;
+            sym_data.is_global = is_global;
+            sym_data.is_managed = is_managed;
+
+            debug!("Data symbol: name={}, is_global={}, is_managed={}, kind={:?}, from_global_stream={}", 
+                   String::from_utf8_lossy(data.name), is_global, is_managed, sym.kind, is_global_stream);
+
+            // Only collect data symbols from global symbol stream (not module streams)
+            // This matches old pdb crate behavior which only reads from global_symbols()
+            if is_global_stream {
+                output_pdb.global_data.push(sym_data);
             }
         }
         _ => {
             // Many symbol types we don't handle yet
+            // Log unhandled symbols for debugging
+            debug!(
+                "Unhandled symbol type: {:?} (kind: {:?})",
+                sym_data, sym.kind
+            );
         }
     }
 

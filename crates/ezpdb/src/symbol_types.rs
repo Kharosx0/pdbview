@@ -433,6 +433,7 @@ pub struct PublicSymbol {
 impl
     From<(
         &ms_pdb::Pdb,
+        uuid::Uuid,
         &ms_pdb::codeview::syms::Pub<'_>,
         Option<usize>,
         &ms_pdb::tpi::TypeStream<Vec<u8>>,
@@ -441,12 +442,13 @@ impl
     fn from(
         data: (
             &ms_pdb::Pdb,
+            uuid::Uuid,
             &ms_pdb::codeview::syms::Pub<'_>,
             Option<usize>,
             &ms_pdb::tpi::TypeStream<Vec<u8>>,
         ),
     ) -> Self {
-        let (pdb, sym, _base_address, _type_stream) = data;
+        let (pdb, guid, sym, _base_address, _type_stream) = data;
 
         let offset_segment = sym.offset_segment();
 
@@ -460,6 +462,7 @@ impl
         // Convert section:offset to RVA using the section map
         let offset = crate::section_offset_to_rva(
             pdb,
+            guid,
             offset_segment.segment.get(),
             offset_segment.offset.get(),
         );
@@ -499,6 +502,7 @@ pub struct Data {
 impl
     TryFrom<(
         &ms_pdb::Pdb,
+        uuid::Uuid,
         &ms_pdb::codeview::syms::Data<'_>,
         Option<usize>,
         &ms_pdb::tpi::TypeStream<Vec<u8>>,
@@ -510,13 +514,14 @@ impl
     fn try_from(
         data: (
             &ms_pdb::Pdb,
+            uuid::Uuid,
             &ms_pdb::codeview::syms::Data<'_>,
             Option<usize>,
             &ms_pdb::tpi::TypeStream<Vec<u8>>,
             &HashMap<TypeIndexNumber, TypeRef>,
         ),
     ) -> Result<Self, Self::Error> {
-        let (pdb, sym, _base_address, _type_stream, parsed_types) = data;
+        let (pdb, guid, sym, _base_address, _type_stream, parsed_types) = data;
 
         let offset_segment = sym.header.offset_segment;
         let type_index = sym.header.type_.get();
@@ -524,6 +529,7 @@ impl
         // Convert section:offset to RVA using the section map
         let offset = crate::section_offset_to_rva(
             pdb,
+            guid,
             offset_segment.segment.get(),
             offset_segment.offset.get(),
         );
@@ -572,6 +578,7 @@ pub struct Procedure {
 impl
     From<(
         &ms_pdb::Pdb,
+        uuid::Uuid,
         &ms_pdb::codeview::syms::Proc<'_>,
         Option<usize>,
         &ms_pdb::tpi::TypeStream<Vec<u8>>,
@@ -580,12 +587,13 @@ impl
     fn from(
         data: (
             &ms_pdb::Pdb,
+            uuid::Uuid,
             &ms_pdb::codeview::syms::Proc<'_>,
             Option<usize>,
             &ms_pdb::tpi::TypeStream<Vec<u8>>,
         ),
     ) -> Self {
-        let (pdb, sym, _base_address, type_stream) = data;
+        let (pdb, guid, sym, _base_address, type_stream) = data;
 
         let offset_segment = sym.fixed.offset_segment;
         let type_index = sym.fixed.proc_type.get();
@@ -600,6 +608,7 @@ impl
         // Convert section:offset to RVA using the section map
         let address = crate::section_offset_to_rva(
             pdb,
+            guid,
             offset_segment.segment.get(),
             offset_segment.offset.get(),
         );
