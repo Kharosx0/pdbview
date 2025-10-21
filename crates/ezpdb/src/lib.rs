@@ -39,7 +39,7 @@ fn convert_version(version: u32) -> Version {
 struct ImageSectionHeader {
     name: [u8; 8],
     virtual_size: u32,
-    virtual_address: u32,   // This is the RVA of the section
+    virtual_address: u32, // This is the RVA of the section
     size_of_raw_data: u32,
     pointer_to_raw_data: u32,
     pointer_to_relocations: u32,
@@ -50,33 +50,33 @@ struct ImageSectionHeader {
 }
 
 /// Converts a section:offset pair to an RVA (Relative Virtual Address).
-/// 
+///
 /// This reads the IMAGE_SECTION_HEADER structures from the PDB's optional debug header
 /// (stream index 5, `section_header_data`) to map section-relative offsets to RVAs.
-/// 
+///
 /// Section indices in PDB symbols are 1-based.
 fn section_offset_to_rva(pdb: &Pdb, section: u16, offset: u32) -> Option<usize> {
     // Read the DBI stream
     let dbi_data = pdb.read_stream_to_vec(Stream::DBI.into()).ok()?;
     let dbi = DbiStream::parse(dbi_data).ok()?;
-    
+
     // Get the optional debug header
     let opt_dbg = dbi.optional_debug_header().ok()?;
-    
+
     // Get the section header stream index
     let section_header_stream = opt_dbg.stream(OptionalDebugHeaderStream::section_header_data)?;
-    
+
     // Read the section header stream
     let section_headers_data = pdb.read_stream_to_vec(section_header_stream).ok()?;
-    
+
     // Parse as an array of IMAGE_SECTION_HEADER structures
     let section_headers = <[ImageSectionHeader]>::ref_from_bytes(&section_headers_data).ok()?;
-    
+
     // Section indices are 1-based in PDB symbols
     if section == 0 || section as usize > section_headers.len() {
         return None;
     }
-    
+
     let section_header = &section_headers[section as usize - 1];
     Some((section_header.virtual_address + offset) as usize)
 }
