@@ -106,7 +106,10 @@ impl ParsedPdb {
                             if !class.properties.forward_reference
                                 && class.unique_name.as_ref() == Some(&unique_name)
                             {
-                                warn!("Resolved forward reference for {} to complete definition", name);
+                                warn!(
+                                    "Resolved forward reference for {} to complete definition",
+                                    name
+                                );
                                 return Some(Rc::clone(type_ref));
                             }
                         }
@@ -114,7 +117,10 @@ impl ParsedPdb {
                             if !union.properties.forward_reference
                                 && union.unique_name.as_ref() == Some(&unique_name)
                             {
-                                warn!("Resolved forward reference for {} to complete definition", name);
+                                warn!(
+                                    "Resolved forward reference for {} to complete definition",
+                                    name
+                                );
                                 return Some(Rc::clone(type_ref));
                             }
                         }
@@ -124,7 +130,10 @@ impl ParsedPdb {
             }
 
             // No complete definition found, return the forward reference
-            warn!("Type {} only has forward reference, no complete definition found", name);
+            warn!(
+                "Type {} only has forward reference, no complete definition found",
+                name
+            );
             return Some(fwd_ref);
         }
 
@@ -218,18 +227,26 @@ pub struct BuildInfo {
     pub arguments: Vec<String>,
 }
 
-impl TryFrom<(&ms_pdb::codeview::syms::BuildInfo, &ms_pdb::tpi::TypeStream<Vec<u8>>)> for BuildInfo {
+impl
+    TryFrom<(
+        &ms_pdb::codeview::syms::BuildInfo,
+        &ms_pdb::tpi::TypeStream<Vec<u8>>,
+    )> for BuildInfo
+{
     type Error = crate::error::Error;
 
     fn try_from(
-        info: (&ms_pdb::codeview::syms::BuildInfo, &ms_pdb::tpi::TypeStream<Vec<u8>>),
+        info: (
+            &ms_pdb::codeview::syms::BuildInfo,
+            &ms_pdb::tpi::TypeStream<Vec<u8>>,
+        ),
     ) -> Result<Self, Self::Error> {
         let (symbol, ipi_stream) = info;
-        
+
         // BuildInfo.item is an ItemId pointing to an LF_BUILDINFO record in IPI stream
         let type_index = ms_pdb::codeview::types::TypeIndex(symbol.item);
         let mut arguments = Vec::new();
-        
+
         if let Ok(type_record) = ipi_stream.record(type_index) {
             // Parse the LF_BUILDINFO record
             match type_record.parse() {
@@ -241,9 +258,11 @@ impl TryFrom<(&ms_pdb::codeview::syms::BuildInfo, &ms_pdb::tpi::TypeStream<Vec<u
                         if arg_type_index.0 == 0 {
                             continue;
                         }
-                        
+
                         if let Ok(arg_record) = ipi_stream.record(arg_type_index) {
-                            if let Ok(ms_pdb::codeview::types::TypeData::StringId(string_id)) = arg_record.parse() {
+                            if let Ok(ms_pdb::codeview::types::TypeData::StringId(string_id)) =
+                                arg_record.parse()
+                            {
                                 arguments.push(string_id.name.to_string());
                             }
                         }
@@ -258,10 +277,8 @@ impl TryFrom<(&ms_pdb::codeview::syms::BuildInfo, &ms_pdb::tpi::TypeStream<Vec<u
                 }
             }
         }
-        
-        Ok(BuildInfo {
-            arguments,
-        })
+
+        Ok(BuildInfo { arguments })
     }
 }
 
@@ -413,12 +430,24 @@ pub struct PublicSymbol {
     pub offset: Option<usize>,
 }
 
-impl From<(&ms_pdb::codeview::syms::Pub<'_>, usize, &ms_pdb::tpi::TypeStream<Vec<u8>>)> for PublicSymbol {
-    fn from(data: (&ms_pdb::codeview::syms::Pub<'_>, usize, &ms_pdb::tpi::TypeStream<Vec<u8>>)) -> Self {
+impl
+    From<(
+        &ms_pdb::codeview::syms::Pub<'_>,
+        usize,
+        &ms_pdb::tpi::TypeStream<Vec<u8>>,
+    )> for PublicSymbol
+{
+    fn from(
+        data: (
+            &ms_pdb::codeview::syms::Pub<'_>,
+            usize,
+            &ms_pdb::tpi::TypeStream<Vec<u8>>,
+        ),
+    ) -> Self {
         let (sym, base_address, _type_stream) = data;
 
         let offset_segment = sym.offset_segment();
-        
+
         if offset_segment.segment.get() == 0 {
             warn!(
                 "symbol type has an invalid section index and RVA will be invalid: {:?}",
@@ -502,7 +531,7 @@ impl
 
         let data = Data {
             name: sym.name.to_string(),
-            is_global: true, // Set by handle_symbol() based on SymKind
+            is_global: true,   // Set by handle_symbol() based on SymKind
             is_managed: false, // TODO: Detect managed symbols
             ty,
             offset,
@@ -566,7 +595,9 @@ impl
         let signature = type_stream.record(type_index).ok().map(|type_info| {
             format!(
                 "{:?}",
-                type_info.parse().unwrap_or_else(|_| ms_pdb::codeview::types::TypeData::Unknown)
+                type_info
+                    .parse()
+                    .unwrap_or(ms_pdb::codeview::types::TypeData::Unknown)
             )
         });
 

@@ -1,6 +1,6 @@
 use ezpdb::symbol_types::*;
 use ezpdb::type_info::*;
-use log::{debug, warn};
+use log::debug;
 use std::io::{self, Write};
 
 pub fn print_plain(output: &mut impl Write, pdb_info: &ParsedPdb) -> io::Result<()> {

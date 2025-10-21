@@ -125,18 +125,22 @@ impl TryFrom<ms_pdb::codeview::types::UdtProperties> for TypeProperties {
     fn try_from(props: ms_pdb::codeview::types::UdtProperties) -> Result<Self, Self::Error> {
         // Use catch_unwind for each bitfield access to handle potential overflow panics
         use std::panic::{catch_unwind, AssertUnwindSafe};
-        
+
         Ok(TypeProperties {
             packed: catch_unwind(AssertUnwindSafe(|| props.packed())).unwrap_or(false),
             constructors: catch_unwind(AssertUnwindSafe(|| props.ctor())).unwrap_or(false),
-            overlapped_operators: catch_unwind(AssertUnwindSafe(|| props.ovlops())).unwrap_or(false),
+            overlapped_operators: catch_unwind(AssertUnwindSafe(|| props.ovlops()))
+                .unwrap_or(false),
             is_nested_type: catch_unwind(AssertUnwindSafe(|| props.isnested())).unwrap_or(false),
-            contains_nested_types: catch_unwind(AssertUnwindSafe(|| props.cnested())).unwrap_or(false),
-            overload_assignment: catch_unwind(AssertUnwindSafe(|| props.opassign())).unwrap_or(false),
+            contains_nested_types: catch_unwind(AssertUnwindSafe(|| props.cnested()))
+                .unwrap_or(false),
+            overload_assignment: catch_unwind(AssertUnwindSafe(|| props.opassign()))
+                .unwrap_or(false),
             overload_coasting: catch_unwind(AssertUnwindSafe(|| props.opcast())).unwrap_or(false),
             forward_reference: catch_unwind(AssertUnwindSafe(|| props.fwdref())).unwrap_or(false),
             scoped_definition: catch_unwind(AssertUnwindSafe(|| props.scoped())).unwrap_or(false),
-            has_unique_name: catch_unwind(AssertUnwindSafe(|| props.hasuniquename())).unwrap_or(false),
+            has_unique_name: catch_unwind(AssertUnwindSafe(|| props.hasuniquename()))
+                .unwrap_or(false),
             sealed: catch_unwind(AssertUnwindSafe(|| props.sealed())).unwrap_or(false),
             hfa: catch_unwind(AssertUnwindSafe(|| props.hfa() as u8)).unwrap_or(0),
             intristic_type: catch_unwind(AssertUnwindSafe(|| props.intrinsic())).unwrap_or(false),
@@ -345,8 +349,8 @@ impl Typed for Union {
     fn type_size(&self, pdb: &ParsedPdb) -> usize {
         if self.properties.forward_reference {
             // Find the implementation
-            for (_key, value) in &pdb.types {
-                if let Some(value) = value.as_ref().try_borrow().ok() {
+            for value in pdb.types.values() {
+                if let Ok(value) = value.as_ref().try_borrow() {
                     if let Type::Union(union) = &*value {
                         if !union.properties.forward_reference
                             && union.unique_name == self.unique_name
@@ -379,17 +383,16 @@ impl TryFrom<FromUnion<'_, '_>> for Union {
 
         let fields_type = crate::handle_type(fields, output_pdb, type_stream)?;
 
-        let fields;
-        let borrowed_fields = fields_type.as_ref().borrow();
-        match &*borrowed_fields {
-            Type::FieldList(fields_list) => {
-                fields = fields_list.0.clone();
+        let fields = {
+            let borrowed_fields = fields_type.as_ref().borrow();
+            match &*borrowed_fields {
+                Type::FieldList(fields_list) => fields_list.0.clone(),
+                _ => {
+                    drop(borrowed_fields);
+                    vec![fields_type]
+                }
             }
-            _ => {
-                drop(borrowed_fields);
-                fields = vec![fields_type];
-            }
-        }
+        };
 
         let union_result = Union {
             name: union.name.to_string(),
@@ -428,7 +431,7 @@ impl TryFrom<FromBitfield<'_, '_>> for Bitfield {
 
         Ok(Bitfield {
             underlying_type,
-            len: 0, // TODO: Extract from raw type record if needed
+            len: 0,      // TODO: Extract from raw type record if needed
             position: 0, // TODO: Extract from raw type record if needed
         })
     }
@@ -470,16 +473,15 @@ impl TryFrom<FromEnumeration<'_, '_>> for Enumeration {
 
         let fields_type = crate::handle_type(fields, output_pdb, type_stream)?;
 
-        let fields;
-        let borrowed_fields = fields_type.as_ref().borrow();
-        match &*borrowed_fields {
-            Type::FieldList(fields_list) => {
-                fields = fields_list.0.clone();
+        let fields = {
+            let borrowed_fields = fields_type.as_ref().borrow();
+            match &*borrowed_fields {
+                Type::FieldList(fields_list) => fields_list.0.clone(),
+                _other => {
+                    vec![]
+                }
             }
-            _other => {
-                fields = vec![];
-            }
-        }
+        };
 
         let fields = fields
             .iter()
@@ -553,7 +555,7 @@ impl TryFrom<FromVariant<'_>> for VariantValue {
                 return Ok(VariantValue::U64(val));
             }
         }
-        
+
         if let Ok(val) = i64::try_from(number) {
             if val >= i8::MIN as i64 && val <= i8::MAX as i64 {
                 return Ok(VariantValue::I8(val as i8));
@@ -565,7 +567,7 @@ impl TryFrom<FromVariant<'_>> for VariantValue {
                 return Ok(VariantValue::I64(val));
             }
         }
-        
+
         Err(anyhow::anyhow!("Could not convert Number to VariantValue"))?
     }
 }
@@ -587,21 +589,21 @@ impl TryFrom<FromPointer<'_, '_>> for Pointer {
     fn try_from(data: FromPointer<'_, '_>) -> Result<Self, Self::Error> {
         let (pointer, type_stream, output_pdb) = data;
 
-        let underlying_type = crate::handle_type(pointer.fixed.ty.get(), output_pdb, type_stream).ok();
+        let underlying_type =
+            crate::handle_type(pointer.fixed.ty.get(), output_pdb, type_stream).ok();
         let attr = pointer.fixed.attr();
 
         // Try to extract size, but use a safe fallback if bitfield access panics
-        let size = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            attr.size() as usize
-        })).unwrap_or_else(|_| {
-            // If bitfield access panics, infer size from pointer kind
-            match attr.pointer_kind() {
-                0 | 1 | 2 => 2,     // Near16, Far16, Huge16
-                10 | 11 => 4,       // Near32, Far32
-                12 => 8,            // Ptr64
-                _ => 8,             // default to 64-bit
-            }
-        });
+        let size = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| attr.size() as usize))
+            .unwrap_or_else(|_| {
+                // If bitfield access panics, infer size from pointer kind
+                match attr.pointer_kind() {
+                    0..=2 => 2,   // Near16, Far16, Huge16
+                    10 | 11 => 4, // Near32, Far32
+                    12 => 8,      // Ptr64
+                    _ => 8,       // default to 64-bit
+                }
+            });
 
         Ok(Pointer {
             underlying_type,
@@ -704,7 +706,7 @@ impl Primitive {
             return indirection.size();
         }
 
-        return self.kind.size();
+        self.kind.size()
     }
 }
 
@@ -952,8 +954,10 @@ impl TryFrom<FromArray<'_, '_>> for Array {
     fn try_from(data: FromArray<'_, '_>) -> Result<Self, Self::Error> {
         let (array, type_stream, output_pdb) = data;
 
-        let element_type = crate::handle_type(array.fixed.element_type.get(), output_pdb, type_stream)?;
-        let indexing_type = crate::handle_type(array.fixed.index_type.get(), output_pdb, type_stream)?;
+        let element_type =
+            crate::handle_type(array.fixed.element_type.get(), output_pdb, type_stream)?;
+        let indexing_type =
+            crate::handle_type(array.fixed.index_type.get(), output_pdb, type_stream)?;
         let size = u64::try_from(array.len).unwrap_or(0) as usize;
 
         let arr = Array {
@@ -985,7 +989,7 @@ impl TryFrom<FromFieldList<'_, '_>> for FieldList {
         let (field_list, type_stream, output_pdb) = data;
 
         let mut fields = Vec::new();
-        
+
         // Iterate through all fields in the field list
         for field in field_list.iter() {
             match field {
@@ -1001,7 +1005,8 @@ impl TryFrom<FromFieldList<'_, '_>> for FieldList {
                     fields.push(Rc::new(RefCell::new(member_with_name)));
                 }
                 ms_pdb::codeview::types::fields::Field::StaticMember(static_member) => {
-                    let member_type = crate::handle_type(static_member.ty, output_pdb, type_stream)?;
+                    let member_type =
+                        crate::handle_type(static_member.ty, output_pdb, type_stream)?;
                     // Create a Type::StaticMember with the name
                     let static_member_with_name = Type::StaticMember(StaticMember {
                         name: static_member.name.to_string(),
@@ -1021,8 +1026,10 @@ impl TryFrom<FromFieldList<'_, '_>> for FieldList {
                     fields.push(Rc::new(RefCell::new(base_class_type)));
                 }
                 ms_pdb::codeview::types::fields::Field::DirectVirtualBaseClass(vbase) => {
-                    let base_type = crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream)?;
-                    let base_pointer = crate::handle_type(vbase.fixed.vbtype.get(), output_pdb, type_stream)?;
+                    let base_type =
+                        crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream)?;
+                    let base_pointer =
+                        crate::handle_type(vbase.fixed.vbtype.get(), output_pdb, type_stream)?;
                     let base_pointer_offset = u64::try_from(vbase.vbpoff).unwrap_or(0) as usize;
                     let virtual_base_offset = u64::try_from(vbase.vboff).unwrap_or(0) as usize;
                     // Create a Type::VirtualBaseClass
@@ -1036,8 +1043,10 @@ impl TryFrom<FromFieldList<'_, '_>> for FieldList {
                     fields.push(Rc::new(RefCell::new(vbase_type)));
                 }
                 ms_pdb::codeview::types::fields::Field::IndirectVirtualBaseClass(vbase) => {
-                    let base_type = crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream)?;
-                    let base_pointer = crate::handle_type(vbase.fixed.vbtype.get(), output_pdb, type_stream)?;
+                    let base_type =
+                        crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream)?;
+                    let base_pointer =
+                        crate::handle_type(vbase.fixed.vbtype.get(), output_pdb, type_stream)?;
                     let base_pointer_offset = u64::try_from(vbase.vbpoff).unwrap_or(0) as usize;
                     let virtual_base_offset = u64::try_from(vbase.vboff).unwrap_or(0) as usize;
                     // Create a Type::VirtualBaseClass
@@ -1051,7 +1060,8 @@ impl TryFrom<FromFieldList<'_, '_>> for FieldList {
                     fields.push(Rc::new(RefCell::new(vbase_type)));
                 }
                 ms_pdb::codeview::types::fields::Field::NestedType(nested) => {
-                    let nested_type = crate::handle_type(nested.nested_ty, output_pdb, type_stream)?;
+                    let nested_type =
+                        crate::handle_type(nested.nested_ty, output_pdb, type_stream)?;
                     // Create a Type::Nested
                     let nested_with_name = Type::Nested(Nested {
                         name: nested.name.to_string(),
@@ -1100,7 +1110,8 @@ impl TryFrom<FromArgumentList<'_, '_>> for ArgumentList {
     fn try_from(data: FromArgumentList<'_, '_>) -> Result<Self, Self::Error> {
         let (arg_list, type_stream, output_pdb) = data;
 
-        let arguments: Result<Vec<TypeRef>, Self::Error> = arg_list.args
+        let arguments: Result<Vec<TypeRef>, Self::Error> = arg_list
+            .args
             .iter()
             .map(|typ| crate::handle_type(typ.get(), output_pdb, type_stream))
             .collect();
@@ -1129,7 +1140,8 @@ impl TryFrom<FromModifier<'_, '_>> for Modifier {
     fn try_from(data: FromModifier<'_, '_>) -> Result<Self, Self::Error> {
         let (modifier, type_stream, output_pdb) = data;
 
-        let underlying_type = crate::handle_type(modifier.underlying_type.get(), output_pdb, type_stream)?;
+        let underlying_type =
+            crate::handle_type(modifier.underlying_type.get(), output_pdb, type_stream)?;
 
         Ok(Modifier {
             underlying_type,
@@ -1206,9 +1218,9 @@ impl TryFrom<FromProcedure<'_, '_>> for Procedure {
             argument_list: arguments,
             attributes: FunctionAttributes {
                 calling_convention: proc.call,
-                cxx_return_udt: false,  // TODO: Extract from call convention if needed
-                is_constructor: false,  // Not available in Proc
-                is_constructor_with_virtual_bases: false,  // Not available in Proc
+                cxx_return_udt: false, // TODO: Extract from call convention if needed
+                is_constructor: false, // Not available in Proc
+                is_constructor_with_virtual_bases: false, // Not available in Proc
             },
         })
     }
@@ -1277,9 +1289,9 @@ impl TryFrom<FromMemberFunction<'_, '_>> for MemberFunction {
             argument_list: arguments,
             attributes: FunctionAttributes {
                 calling_convention: member.call,
-                cxx_return_udt: false,  // TODO: Extract from calling convention if needed
-                is_constructor: false,  // Not directly available
-                is_constructor_with_virtual_bases: false,  // Not directly available
+                cxx_return_udt: false, // TODO: Extract from calling convention if needed
+                is_constructor: false, // Not directly available
+                is_constructor_with_virtual_bases: false, // Not directly available
             },
             this_adjustment: member.this_adjust.get(),
         })
@@ -1497,19 +1509,27 @@ impl TryFrom<FromFuncId<'_, '_>> for FuncIdType {
     type Error = Error;
     fn try_from(data: FromFuncId<'_, '_>) -> Result<Self, Self::Error> {
         let (func_id, type_stream, output_pdb) = data;
-        
+
         let function_type = if func_id.fixed.func_type.get().0 != 0 {
-            Some(crate::handle_type(func_id.fixed.func_type.get(), output_pdb, type_stream)?)
+            Some(crate::handle_type(
+                func_id.fixed.func_type.get(),
+                output_pdb,
+                type_stream,
+            )?)
         } else {
             None
         };
-        
+
         let parent_scope = if func_id.fixed.scope.get() != 0 {
-            Some(crate::handle_type(ms_pdb::codeview::types::TypeIndex(func_id.fixed.scope.get()), output_pdb, type_stream)?)
+            Some(crate::handle_type(
+                ms_pdb::codeview::types::TypeIndex(func_id.fixed.scope.get()),
+                output_pdb,
+                type_stream,
+            )?)
         } else {
             None
         };
-        
+
         Ok(FuncIdType {
             name: func_id.name.to_string(),
             function_type,
@@ -1536,19 +1556,27 @@ impl TryFrom<FromMFuncId<'_, '_>> for MFuncIdType {
     type Error = Error;
     fn try_from(data: FromMFuncId<'_, '_>) -> Result<Self, Self::Error> {
         let (mfunc_id, type_stream, output_pdb) = data;
-        
+
         let function_type = if mfunc_id.fixed.func_type.get().0 != 0 {
-            Some(crate::handle_type(mfunc_id.fixed.func_type.get(), output_pdb, type_stream)?)
+            Some(crate::handle_type(
+                mfunc_id.fixed.func_type.get(),
+                output_pdb,
+                type_stream,
+            )?)
         } else {
             None
         };
-        
+
         let parent_type = if mfunc_id.fixed.parent_type.get().0 != 0 {
-            Some(crate::handle_type(mfunc_id.fixed.parent_type.get(), output_pdb, type_stream)?)
+            Some(crate::handle_type(
+                mfunc_id.fixed.parent_type.get(),
+                output_pdb,
+                type_stream,
+            )?)
         } else {
             None
         };
-        
+
         Ok(MFuncIdType {
             name: mfunc_id.name.to_string(),
             function_type,
@@ -1574,13 +1602,17 @@ impl TryFrom<FromStringId<'_, '_>> for StringIdType {
     type Error = Error;
     fn try_from(data: FromStringId<'_, '_>) -> Result<Self, Self::Error> {
         let (string_id, type_stream, output_pdb) = data;
-        
+
         let substring = if string_id.id != 0 {
-            Some(crate::handle_type(ms_pdb::codeview::types::TypeIndex(string_id.id), output_pdb, type_stream)?)
+            Some(crate::handle_type(
+                ms_pdb::codeview::types::TypeIndex(string_id.id),
+                output_pdb,
+                type_stream,
+            )?)
         } else {
             None
         };
-        
+
         Ok(StringIdType {
             id: string_id.name.to_string(),
             substring,
@@ -1604,18 +1636,22 @@ impl TryFrom<FromSubStrList<'_, '_>> for SubStrListType {
     type Error = Error;
     fn try_from(data: FromSubStrList<'_, '_>) -> Result<Self, Self::Error> {
         let (substr_list, type_stream, output_pdb) = data;
-        
+
         let strings: Result<Vec<TypeRef>, Error> = substr_list
             .ids
             .iter()
             .map(|id| id.get())
             .filter(|id| *id != 0)
-            .map(|id| crate::handle_type(ms_pdb::codeview::types::TypeIndex(id), output_pdb, type_stream))
+            .map(|id| {
+                crate::handle_type(
+                    ms_pdb::codeview::types::TypeIndex(id),
+                    output_pdb,
+                    type_stream,
+                )
+            })
             .collect();
-        
-        Ok(SubStrListType {
-            strings: strings?,
-        })
+
+        Ok(SubStrListType { strings: strings? })
     }
 }
 
@@ -1635,18 +1671,22 @@ impl TryFrom<FromBuildInfo<'_, '_>> for BuildInfoTypeData {
     type Error = Error;
     fn try_from(data: FromBuildInfo<'_, '_>) -> Result<Self, Self::Error> {
         let (build_info, type_stream, output_pdb) = data;
-        
+
         let items: Result<Vec<TypeRef>, Error> = build_info
             .args
             .iter()
             .map(|id| id.get())
             .filter(|id| *id != 0)
-            .map(|id| crate::handle_type(ms_pdb::codeview::types::TypeIndex(id), output_pdb, type_stream))
+            .map(|id| {
+                crate::handle_type(
+                    ms_pdb::codeview::types::TypeIndex(id),
+                    output_pdb,
+                    type_stream,
+                )
+            })
             .collect();
-        
-        Ok(BuildInfoTypeData {
-            items: items?,
-        })
+
+        Ok(BuildInfoTypeData { items: items? })
     }
 }
 
@@ -1668,13 +1708,13 @@ impl TryFrom<FromUdtSrcLine<'_, '_>> for UdtSrcLineType {
     type Error = Error;
     fn try_from(data: FromUdtSrcLine<'_, '_>) -> Result<Self, Self::Error> {
         let (udt_src_line, type_stream, output_pdb) = data;
-        
+
         // src is a NameIndex, not a TypeIndex - it references the /names stream, not type stream
         // For now, we'll skip the source file lookup and just store the UDT type
         let source_file = None;
-        
+
         let udt = crate::handle_type(udt_src_line.ty.get(), output_pdb, type_stream)?;
-        
+
         Ok(UdtSrcLineType {
             source_file,
             line_number: udt_src_line.line.get(),
@@ -1693,13 +1733,13 @@ impl TryFrom<FromUdtModSrcLine<'_, '_>> for UdtSrcLineType {
     type Error = Error;
     fn try_from(data: FromUdtModSrcLine<'_, '_>) -> Result<Self, Self::Error> {
         let (udt_mod_src_line, type_stream, output_pdb) = data;
-        
+
         // Similar to UdtSrcLine, but includes module index (imod)
         // src is a NameIndex referencing /names stream
         let source_file = None;
-        
+
         let udt = crate::handle_type(udt_mod_src_line.ty.get(), output_pdb, type_stream)?;
-        
+
         Ok(UdtSrcLineType {
             source_file,
             line_number: udt_mod_src_line.line.get(),
