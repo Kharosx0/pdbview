@@ -1,6 +1,6 @@
 use crate::error::Error;
 use crate::symbol_types::*;
-use log::{debug, info, warn};
+use log::{debug, trace, warn};
 use ms_pdb::{
     codeview::{
         syms::{Sym, SymData},
@@ -37,7 +37,7 @@ impl<'a> SymbolStream<'a> {
     fn is_global(&self) -> bool {
         matches!(self, SymbolStream::Global(_))
     }
-
+    
     /// Iterator over symbols in the stream
     fn iter_syms(&self) -> Box<dyn Iterator<Item = Sym<'a>> + 'a> {
         match self {
@@ -111,12 +111,12 @@ fn read_section_headers_from_pdb(pdb: &Pdb) -> Option<Vec<ImageSectionHeader>> {
 }
 
 /// Gets section headers for a PDB, using cache if available.
-///
+/// 
 /// This function checks the global cache first. If headers for this PDB's GUID
 /// are not cached, it reads them from the PDB and caches them for future use.
 fn get_section_headers(pdb: &Pdb, guid: uuid::Uuid) -> Option<Vec<ImageSectionHeader>> {
     let cache = get_section_header_cache();
-
+    
     // Try to get from cache first
     {
         let cache_guard = cache.lock().ok()?;
@@ -124,16 +124,16 @@ fn get_section_headers(pdb: &Pdb, guid: uuid::Uuid) -> Option<Vec<ImageSectionHe
             return Some(headers.clone());
         }
     }
-
+    
     // Not in cache, read from PDB
     let headers = read_section_headers_from_pdb(pdb)?;
-
+    
     // Store in cache
     {
         let mut cache_guard = cache.lock().ok()?;
         cache_guard.insert(guid, headers.clone());
     }
-
+    
     Some(headers)
 }
 
@@ -156,7 +156,7 @@ fn section_offset_to_rva(pdb: &Pdb, guid: uuid::Uuid, section: u16, offset: u32)
     }
 
     let section_header = &section_headers[section as usize - 1];
-
+    
     // Use checked_add to avoid overflow
     section_header
         .virtual_address
@@ -463,7 +463,7 @@ fn handle_symbols_for_stream<'a>(
     base_address: Option<usize>,
 ) -> Result<(), Error> {
     let is_global = stream.is_global();
-
+    
     for sym in stream.iter_syms() {
         if let Err(e) = handle_symbol(
             pdb,
@@ -474,10 +474,10 @@ fn handle_symbols_for_stream<'a>(
             base_address,
             is_global,
         ) {
-            warn!("Error handling symbol: {}", e);
+            trace!("Error handling symbol: {}", e);
         }
     }
-
+    
     Ok(())
 }
 
@@ -498,43 +498,16 @@ fn handle_symbol<'a>(
     let sym_data = match sym.parse() {
         Ok(data) => data,
         Err(e) => {
-            warn!("Failed to parse symbol: {}", e);
+            trace!("Failed to parse symbol: {}", e);
             return Ok(()); // Non-fatal
         }
     };
-
-    // Track the 8 missing symbols for detailed logging
-    let missing_symbols = [
-        "LdrpForkConditionVariable",
-        "EtwpRegistrationTable",
-        "LdrpRedirectionTree",
-        "LdrpRetryingModuleIndex",
-        "EtwpGuidEntryTable",
-        "LdrpMappingInfoIndex",
-        "LdrpModuleBaseAddressIndex",
-        "RtlpPtrTree",
-    ];
 
     match sym_data {
         SymData::Pub(data) => {
             debug!("public symbol: {:?}", data);
             let converted_symbol: crate::symbol_types::PublicSymbol =
                 (pdb, guid, &data, base_address, type_stream).into();
-
-            // Check if this is one of the missing symbols
-            let sym_name = String::from_utf8_lossy(data.name);
-            if missing_symbols.contains(&sym_name.as_ref()) {
-                let flags = data.fixed.flags.get();
-                info!(
-                    "NEW PDB - Public symbol (one of 8 missing): name={}, flags={:#x}, is_function={}, is_code={}, offset={:?}",
-                    sym_name,
-                    flags,
-                    converted_symbol.is_function,
-                    converted_symbol.is_code,
-                    converted_symbol.offset
-                );
-            }
-
             output_pdb.public_symbols.push(converted_symbol);
         }
         SymData::Proc(data) => {
@@ -566,34 +539,18 @@ fn handle_symbol<'a>(
                 ms_pdb::codeview::syms::SymKind::S_GMANDATA
                     | ms_pdb::codeview::syms::SymKind::S_LMANDATA
             );
-            let mut sym_data: crate::symbol_types::Data = (
-                pdb,
-                guid,
-                &data,
-                base_address,
-                type_stream,
-                &output_pdb.types,
-            )
-                .try_into()?;
-            sym_data.is_global = is_global;
-            sym_data.is_managed = is_managed;
-
-            debug!("Data symbol: name={}, is_global={}, is_managed={}, kind={:?}, from_global_stream={}", 
-                   String::from_utf8_lossy(data.name), is_global, is_managed, sym.kind, is_global_stream);
-
+            let mut sym: crate::symbol_types::Data =
+                (pdb, guid, &data, base_address, type_stream, &output_pdb.types).try_into()?;
+            sym.is_global = is_global;
+            sym.is_managed = is_managed;
             // Only collect data symbols from global symbol stream (not module streams)
             // This matches old pdb crate behavior which only reads from global_symbols()
             if is_global_stream {
-                output_pdb.global_data.push(sym_data);
+                output_pdb.global_data.push(sym);
             }
         }
         _ => {
             // Many symbol types we don't handle yet
-            // Log unhandled symbols for debugging
-            debug!(
-                "Unhandled symbol type: {:?} (kind: {:?})",
-                sym_data, sym.kind
-            );
         }
     }
 
@@ -755,11 +712,11 @@ pub(crate) fn handle_type_data(
         TypeData::Unknown => {
             // Unknown types represent type kinds that the library doesn't recognize.
             // Try to get more information from the raw record if possible.
-            warn!("Encountered Unknown type - this may indicate an unsupported type variant");
+            trace!("Encountered Unknown type - this may indicate an unsupported type variant");
             return Err(Error::UnhandledType("Unknown type variant".to_string()));
         }
         _ => {
-            warn!("Unhandled type variant: {:?}", typ);
+            trace!("Unhandled type variant: {:?}", typ);
             return Err(Error::UnhandledType(format!("{:?}", typ)));
         }
     };

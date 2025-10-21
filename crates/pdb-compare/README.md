@@ -56,6 +56,10 @@ cargo run -- -p ntdll.pdb -v
 
 **Run cache test with all available test PDBs:**
 ```bash
+# First, copy your test PDBs to the cache_test_pdbs directory
+cp /path/to/*.pdb cache_test_pdbs/
+
+# Then run the cache test
 cargo run -- --cache-test
 ```
 

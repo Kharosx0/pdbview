@@ -35,7 +35,7 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Initialize logging
+    // Initialize logging - set WARN level by default to reduce noise from unhandled symbol types
     if args.verbose {
         env_logger::Builder::from_default_env()
             .filter_level(log::LevelFilter::Debug)
@@ -43,6 +43,7 @@ fn main() -> Result<()> {
     } else {
         env_logger::Builder::from_default_env()
             .filter_level(log::LevelFilter::Info)
+            .filter_module("ezpdb", log::LevelFilter::Error) // Suppress ezpdb warnings (unhandled symbols)
             .init();
     }
 
@@ -178,19 +179,37 @@ fn main() -> Result<()> {
 
 /// Run cache test with multiple predefined PDB files
 fn run_cache_test() -> Result<()> {
-    let test_pdbs = vec![
-        PathBuf::from("E:\\pdbview\\target\\debug\\pdb_compare.pdb"),
-        PathBuf::from("E:\\tmp\\jobs\\sk\\setup\\oft-setup-f3a331446f2e5bb88a5b307775d84e1c\\fakefs\\symbols\\ntdll.pdb\\569C1118589A215D0BA886504157B8AF1\\ntdll.pdb"),
-        PathBuf::from("E:\\tmp\\jobs\\sk\\setup\\oft-setup-f3a331446f2e5bb88a5b307775d84e1c\\fakefs\\symbols\\hvix64.pdb\\BEB089CD3966319528A589D97B5DB4701\\hvix64.pdb"),
-    ];
+    // Use relative path to cache_test_pdbs directory
+    let cache_dir = PathBuf::from("cache_test_pdbs");
+    
+    // Scan the directory for all .pdb files
+    let mut test_pdbs = Vec::new();
+    if cache_dir.exists() && cache_dir.is_dir() {
+        for entry in std::fs::read_dir(&cache_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("pdb") {
+                test_pdbs.push(path);
+            }
+        }
+    }
+    
+    if test_pdbs.is_empty() {
+        error!("No PDB files found in cache_test_pdbs directory!");
+        error!("Please place test PDB files in the cache_test_pdbs directory");
+        return Err(anyhow::anyhow!("No test PDB files found"));
+    }
+    
+    // Sort for consistent ordering
+    test_pdbs.sort();
 
     info!("=== Cache Test Mode ===");
-    info!("Testing cache functionality with {} PDB files", test_pdbs.len());
+    info!("Testing with {} PDB files from cache_test_pdbs/", test_pdbs.len());
     
     let mut all_output = String::new();
     all_output.push_str("=== Cache Test Results ===\n\n");
-    all_output.push_str(&format!("Testing {} PDB files to verify cache functionality\n", test_pdbs.len()));
-    all_output.push_str("This test ensures section header cache works correctly across multiple PDBs\n\n");
+    all_output.push_str(&format!("Testing {} PDB files from cache_test_pdbs/\n", test_pdbs.len()));
+    all_output.push_str("This test compares old ezpdb (pdb crate) vs new ezpdb (ms-pdb)\n\n");
 
     let mut successful_parses = 0;
     let mut failed_parses = 0;
