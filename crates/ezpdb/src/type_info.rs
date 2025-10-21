@@ -3,7 +3,9 @@ use crate::symbol_types::ParsedPdb;
 use crate::symbol_types::TypeRef;
 #[cfg(feature = "serde")]
 use serde::Serialize;
+use std::cell::RefCell;
 use std::convert::{TryFrom, TryInto};
+use std::rc::Rc;
 
 use log::warn;
 
@@ -197,7 +199,7 @@ impl TryFrom<FromClass<'_, '_>> for Class {
         let size = u64::try_from(class.length).unwrap_or(0);
 
         let fields: Vec<TypeRef> = if fields.0 != 0 {
-            // TODO: perhaps change FieldList to Rc<Vec<TypeRef>?
+            // TODO: perhaps change FieldList to Rc<Vec<TypeRef>>?
             if let Type::FieldList(fields_list) =
                 &*crate::handle_type(fields, output_pdb, type_stream)?
                     .as_ref()
@@ -989,27 +991,73 @@ impl TryFrom<FromFieldList<'_, '_>> for FieldList {
             match field {
                 ms_pdb::codeview::types::fields::Field::Member(member) => {
                     let member_type = crate::handle_type(member.ty, output_pdb, type_stream)?;
-                    fields.push(member_type);
+                    let offset = u64::try_from(member.offset).unwrap_or(0) as usize;
+                    // Create a Type::Member with the name
+                    let member_with_name = Type::Member(Member {
+                        name: member.name.to_string(),
+                        underlying_type: member_type,
+                        offset,
+                    });
+                    fields.push(Rc::new(RefCell::new(member_with_name)));
                 }
                 ms_pdb::codeview::types::fields::Field::StaticMember(static_member) => {
                     let member_type = crate::handle_type(static_member.ty, output_pdb, type_stream)?;
-                    fields.push(member_type);
+                    // Create a Type::StaticMember with the name
+                    let static_member_with_name = Type::StaticMember(StaticMember {
+                        name: static_member.name.to_string(),
+                        field_type: member_type,
+                    });
+                    fields.push(Rc::new(RefCell::new(static_member_with_name)));
                 }
                 ms_pdb::codeview::types::fields::Field::BaseClass(base_class) => {
                     let base_type = crate::handle_type(base_class.ty, output_pdb, type_stream)?;
-                    fields.push(base_type);
+                    let offset = u64::try_from(base_class.offset).unwrap_or(0) as usize;
+                    // Create a Type::BaseClass
+                    let base_class_type = Type::BaseClass(BaseClass {
+                        kind: ClassKind::Struct, // Default to Struct
+                        base_class: base_type,
+                        offset,
+                    });
+                    fields.push(Rc::new(RefCell::new(base_class_type)));
                 }
                 ms_pdb::codeview::types::fields::Field::DirectVirtualBaseClass(vbase) => {
                     let base_type = crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream)?;
-                    fields.push(base_type);
+                    let base_pointer = crate::handle_type(vbase.fixed.vbtype.get(), output_pdb, type_stream)?;
+                    let base_pointer_offset = u64::try_from(vbase.vbpoff).unwrap_or(0) as usize;
+                    let virtual_base_offset = u64::try_from(vbase.vboff).unwrap_or(0) as usize;
+                    // Create a Type::VirtualBaseClass
+                    let vbase_type = Type::VirtualBaseClass(VirtualBaseClass {
+                        direct: true,
+                        base_class: base_type,
+                        base_pointer,
+                        base_pointer_offset,
+                        virtual_base_offset,
+                    });
+                    fields.push(Rc::new(RefCell::new(vbase_type)));
                 }
                 ms_pdb::codeview::types::fields::Field::IndirectVirtualBaseClass(vbase) => {
                     let base_type = crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream)?;
-                    fields.push(base_type);
+                    let base_pointer = crate::handle_type(vbase.fixed.vbtype.get(), output_pdb, type_stream)?;
+                    let base_pointer_offset = u64::try_from(vbase.vbpoff).unwrap_or(0) as usize;
+                    let virtual_base_offset = u64::try_from(vbase.vboff).unwrap_or(0) as usize;
+                    // Create a Type::VirtualBaseClass
+                    let vbase_type = Type::VirtualBaseClass(VirtualBaseClass {
+                        direct: false,
+                        base_class: base_type,
+                        base_pointer,
+                        base_pointer_offset,
+                        virtual_base_offset,
+                    });
+                    fields.push(Rc::new(RefCell::new(vbase_type)));
                 }
                 ms_pdb::codeview::types::fields::Field::NestedType(nested) => {
                     let nested_type = crate::handle_type(nested.nested_ty, output_pdb, type_stream)?;
-                    fields.push(nested_type);
+                    // Create a Type::Nested
+                    let nested_with_name = Type::Nested(Nested {
+                        name: nested.name.to_string(),
+                        nested_type,
+                    });
+                    fields.push(Rc::new(RefCell::new(nested_with_name)));
                 }
                 ms_pdb::codeview::types::fields::Field::OneMethod(_method) => {
                     // Methods don't have a separate type, but we could create a placeholder
@@ -1023,7 +1071,9 @@ impl TryFrom<FromFieldList<'_, '_>> for FieldList {
                 }
                 ms_pdb::codeview::types::fields::Field::VFuncTable(vtable_type) => {
                     let vtable = crate::handle_type(vtable_type, output_pdb, type_stream)?;
-                    fields.push(vtable);
+                    // VFuncTables are stored as VTable type (tuple struct)
+                    let vtable_type = Type::VTable(VTable(vtable));
+                    fields.push(Rc::new(RefCell::new(vtable_type)));
                 }
                 _ => {
                     // Skip unknown field types
