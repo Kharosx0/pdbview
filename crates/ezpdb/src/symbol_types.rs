@@ -432,19 +432,21 @@ pub struct PublicSymbol {
 
 impl
     From<(
+        &ms_pdb::Pdb,
         &ms_pdb::codeview::syms::Pub<'_>,
-        usize,
+        Option<usize>,
         &ms_pdb::tpi::TypeStream<Vec<u8>>,
     )> for PublicSymbol
 {
     fn from(
         data: (
+            &ms_pdb::Pdb,
             &ms_pdb::codeview::syms::Pub<'_>,
-            usize,
+            Option<usize>,
             &ms_pdb::tpi::TypeStream<Vec<u8>>,
         ),
     ) -> Self {
-        let (sym, base_address, _type_stream) = data;
+        let (pdb, sym, _base_address, _type_stream) = data;
 
         let offset_segment = sym.offset_segment();
 
@@ -455,9 +457,12 @@ impl
             )
         }
 
-        // Note: In ms-pdb, we no longer have AddressMap, so offset calculation
-        // is simplified. We just add the base_address to the offset.
-        let offset = Some(offset_segment.offset.get() as usize + base_address);
+        // Convert section:offset to RVA using the section map
+        let offset = crate::section_offset_to_rva(
+            pdb,
+            offset_segment.segment.get(),
+            offset_segment.offset.get(),
+        );
 
         // Extract flags from the PubFixed structure
         let flags = sym.fixed.flags.get();
@@ -493,8 +498,9 @@ pub struct Data {
 
 impl
     TryFrom<(
+        &ms_pdb::Pdb,
         &ms_pdb::codeview::syms::Data<'_>,
-        usize,
+        Option<usize>,
         &ms_pdb::tpi::TypeStream<Vec<u8>>,
         &HashMap<TypeIndexNumber, TypeRef>,
     )> for Data
@@ -503,20 +509,24 @@ impl
 
     fn try_from(
         data: (
+            &ms_pdb::Pdb,
             &ms_pdb::codeview::syms::Data<'_>,
-            usize,
+            Option<usize>,
             &ms_pdb::tpi::TypeStream<Vec<u8>>,
             &HashMap<TypeIndexNumber, TypeRef>,
         ),
     ) -> Result<Self, Self::Error> {
-        let (sym, base_address, _type_stream, parsed_types) = data;
+        let (pdb, sym, _base_address, _type_stream, parsed_types) = data;
 
         let offset_segment = sym.header.offset_segment;
         let type_index = sym.header.type_.get();
 
-        // Note: In ms-pdb, we no longer have AddressMap, so offset calculation
-        // is simplified. We just add the base_address to the offset.
-        let offset = Some(offset_segment.offset.get() as usize + base_address);
+        // Convert section:offset to RVA using the section map
+        let offset = crate::section_offset_to_rva(
+            pdb,
+            offset_segment.segment.get(),
+            offset_segment.offset.get(),
+        );
 
         let ty = Rc::clone(
             parsed_types
@@ -561,19 +571,21 @@ pub struct Procedure {
 
 impl
     From<(
+        &ms_pdb::Pdb,
         &ms_pdb::codeview::syms::Proc<'_>,
-        usize,
+        Option<usize>,
         &ms_pdb::tpi::TypeStream<Vec<u8>>,
     )> for Procedure
 {
     fn from(
         data: (
+            &ms_pdb::Pdb,
             &ms_pdb::codeview::syms::Proc<'_>,
-            usize,
+            Option<usize>,
             &ms_pdb::tpi::TypeStream<Vec<u8>>,
         ),
     ) -> Self {
-        let (sym, base_address, type_stream) = data;
+        let (pdb, sym, _base_address, type_stream) = data;
 
         let offset_segment = sym.fixed.offset_segment;
         let type_index = sym.fixed.proc_type.get();
@@ -585,9 +597,12 @@ impl
             )
         }
 
-        // Note: In ms-pdb, we no longer have AddressMap, so offset calculation
-        // is simplified. We just add the base_address to the offset.
-        let address = Some(offset_segment.offset.get() as usize + base_address);
+        // Convert section:offset to RVA using the section map
+        let address = crate::section_offset_to_rva(
+            pdb,
+            offset_segment.segment.get(),
+            offset_segment.offset.get(),
+        );
 
         // Try to get the signature from the type stream
         let signature = type_stream.record(type_index).ok().map(|type_info| {

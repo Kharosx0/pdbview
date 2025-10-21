@@ -6,13 +6,15 @@ use ms_pdb::{
         syms::{Sym, SymData},
         types::{TypeData, TypeIndex},
     },
-    Pdb,
+    dbi::{optional_dbg::OptionalDebugHeaderStream, DbiStream},
+    Pdb, Stream,
 };
 use std::cell::RefCell;
 use std::convert::TryInto;
 use std::fs::File;
 use std::path::Path;
 use std::rc::Rc;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub mod error;
 pub mod symbol_types;
@@ -28,6 +30,55 @@ fn convert_version(version: u32) -> Version {
         // Add other version mappings as needed
         _ => Version::Other(version),
     }
+}
+
+/// IMAGE_SECTION_HEADER from PE/COFF specification.
+/// This is a 40-byte structure that describes a section in a PE file.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, IntoBytes, FromBytes, KnownLayout, Immutable)]
+struct ImageSectionHeader {
+    name: [u8; 8],
+    virtual_size: u32,
+    virtual_address: u32,   // This is the RVA of the section
+    size_of_raw_data: u32,
+    pointer_to_raw_data: u32,
+    pointer_to_relocations: u32,
+    pointer_to_line_numbers: u32,
+    number_of_relocations: u16,
+    number_of_line_numbers: u16,
+    characteristics: u32,
+}
+
+/// Converts a section:offset pair to an RVA (Relative Virtual Address).
+/// 
+/// This reads the IMAGE_SECTION_HEADER structures from the PDB's optional debug header
+/// (stream index 5, `section_header_data`) to map section-relative offsets to RVAs.
+/// 
+/// Section indices in PDB symbols are 1-based.
+fn section_offset_to_rva(pdb: &Pdb, section: u16, offset: u32) -> Option<usize> {
+    // Read the DBI stream
+    let dbi_data = pdb.read_stream_to_vec(Stream::DBI.into()).ok()?;
+    let dbi = DbiStream::parse(dbi_data).ok()?;
+    
+    // Get the optional debug header
+    let opt_dbg = dbi.optional_debug_header().ok()?;
+    
+    // Get the section header stream index
+    let section_header_stream = opt_dbg.stream(OptionalDebugHeaderStream::section_header_data)?;
+    
+    // Read the section header stream
+    let section_headers_data = pdb.read_stream_to_vec(section_header_stream).ok()?;
+    
+    // Parse as an array of IMAGE_SECTION_HEADER structures
+    let section_headers = <[ImageSectionHeader]>::ref_from_bytes(&section_headers_data).ok()?;
+    
+    // Section indices are 1-based in PDB symbols
+    if section == 0 || section as usize > section_headers.len() {
+        return None;
+    }
+    
+    let section_header = &section_headers[section as usize - 1];
+    Some((section_header.virtual_address + offset) as usize)
 }
 
 /// Decodes a primitive TypeIndex into a Primitive type
@@ -270,6 +321,7 @@ pub fn parse_pdb<P: AsRef<Path>>(
     let gss = pdb.read_gss()?;
     for sym in gss.iter_syms() {
         if let Err(e) = handle_symbol(
+            &pdb,
             sym,
             &mut output_pdb,
             &type_stream,
@@ -310,6 +362,7 @@ pub fn parse_pdb<P: AsRef<Path>>(
 
             for sym in modi_stream.iter_syms() {
                 if let Err(e) = handle_symbol(
+                    &pdb,
                     sym,
                     &mut output_pdb,
                     &type_stream,
@@ -327,14 +380,13 @@ pub fn parse_pdb<P: AsRef<Path>>(
 
 /// Helper to convert symbol data to parsed representation
 fn handle_symbol<'a>(
+    pdb: &Pdb,
     sym: Sym<'a>,
     output_pdb: &mut ParsedPdb,
     type_stream: &ms_pdb::tpi::TypeStream<Vec<u8>>,
     ipi_stream: Option<&ms_pdb::tpi::TypeStream<Vec<u8>>>,
     base_address: Option<usize>,
 ) -> Result<(), Error> {
-    let base_address = base_address.unwrap_or(0);
-
     // Parse the symbol
     let sym_data = match sym.parse() {
         Ok(data) => data,
@@ -348,7 +400,7 @@ fn handle_symbol<'a>(
         SymData::Pub(data) => {
             debug!("public symbol: {:?}", data);
             let converted_symbol: crate::symbol_types::PublicSymbol =
-                (&data, base_address, type_stream).into();
+                (pdb, &data, base_address, type_stream).into();
             output_pdb.public_symbols.push(converted_symbol);
         }
         SymData::Proc(data) => {
@@ -356,7 +408,7 @@ fn handle_symbol<'a>(
             let is_global = matches!(sym.kind, ms_pdb::codeview::syms::SymKind::S_GPROC32);
             let is_dpc = matches!(sym.kind, ms_pdb::codeview::syms::SymKind::S_LPROC32_DPC);
             let mut converted_symbol: crate::symbol_types::Procedure =
-                (&data, base_address, type_stream).into();
+                (pdb, &data, base_address, type_stream).into();
             converted_symbol.is_global = is_global;
             converted_symbol.is_dpc = is_dpc;
             output_pdb.procedures.push(converted_symbol);
@@ -381,7 +433,7 @@ fn handle_symbol<'a>(
                     | ms_pdb::codeview::syms::SymKind::S_LMANDATA
             );
             let mut sym: crate::symbol_types::Data =
-                (&data, base_address, type_stream, &output_pdb.types).try_into()?;
+                (pdb, &data, base_address, type_stream, &output_pdb.types).try_into()?;
             sym.is_global = is_global;
             sym.is_managed = is_managed;
             if sym.is_global {

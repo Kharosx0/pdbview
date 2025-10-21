@@ -13,7 +13,7 @@ name = "pdbview"
 path = "crates/bin/main.rs"
 
 [workspace]
-members = ['crates/ezpdb']
+members = ['crates/ezpdb', "crates/pdb-compare"]
 
 [dependencies]
 pdb = "0.8"
