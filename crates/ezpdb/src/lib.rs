@@ -30,6 +30,116 @@ fn convert_version(version: u32) -> Version {
     }
 }
 
+/// Decodes a primitive TypeIndex into a Primitive type
+/// TypeIndex encodes primitive types in the lower bits:
+/// - Bits 0-7: Type kind (T_VOID, T_CHAR, T_INT4, etc.)
+/// - Bits 8-11: Indirection mode (near16, far16, near32, ptr64, etc.)
+fn decode_primitive_type(
+    idx: ms_pdb::codeview::types::TypeIndex,
+) -> Result<crate::type_info::Primitive, Error> {
+    use crate::type_info::{Indirection, Primitive, PrimitiveKind};
+
+    let type_value = idx.0;
+    let kind_value = type_value & 0xFF;
+    let mode_value = (type_value >> 8) & 0xF;
+
+    // Decode primitive kind from CV_typ_e enum
+    // See cvinfo.h from Microsoft's debug interface access SDK
+    let kind = match kind_value {
+        0x0000 => PrimitiveKind::NoType,
+        0x0003 => PrimitiveKind::Void,
+        0x0008 => PrimitiveKind::HRESULT,
+
+        // Character types
+        0x0010 => PrimitiveKind::Char,
+        0x0020 => PrimitiveKind::Short,
+        0x0021 => PrimitiveKind::UShort,
+        0x0022 => PrimitiveKind::I16,
+        0x0023 => PrimitiveKind::U16,
+
+        // Boolean
+        0x0030 => PrimitiveKind::Bool8,
+        0x0031 => PrimitiveKind::Bool16,
+        0x0033 => PrimitiveKind::Bool32,
+        0x0034 => PrimitiveKind::Bool64,
+
+        // Floating point
+        0x0040 => PrimitiveKind::F32,
+        0x0041 => PrimitiveKind::F32PP,
+        0x0042 => PrimitiveKind::F64,
+        0x0043 => PrimitiveKind::F128,
+        0x0044 => PrimitiveKind::F48,
+        0x0045 => PrimitiveKind::F80,
+        0x0046 => PrimitiveKind::F16,
+
+        // Complex
+        0x0050 => PrimitiveKind::Complex32,
+        0x0051 => PrimitiveKind::Complex64,
+        0x0052 => PrimitiveKind::Complex128,
+        0x0053 => PrimitiveKind::Complex80,
+
+        // 8-bit types
+        0x0068 => PrimitiveKind::I8,
+        0x0069 => PrimitiveKind::U8,
+
+        // Wide character types
+        0x0070 => PrimitiveKind::RChar,
+        0x0071 => PrimitiveKind::WChar,
+
+        // 32-bit integers
+        0x0072 => PrimitiveKind::I32,
+        0x0073 => PrimitiveKind::U32,
+
+        // Long types (platform-dependent)
+        0x0074 => PrimitiveKind::Long,
+        0x0075 => PrimitiveKind::ULong,
+
+        // 64-bit integers
+        0x0076 => PrimitiveKind::Quad,
+        0x0077 => PrimitiveKind::UQuad,
+
+        // Unicode character types
+        0x007a => PrimitiveKind::RChar16,
+        0x007b => PrimitiveKind::RChar32,
+
+        // Explicit sized types
+        0x0013 => PrimitiveKind::I64,
+        0x0014 => PrimitiveKind::Octa,
+        0x0015 => PrimitiveKind::UOcta,
+        0x0017 => PrimitiveKind::I128,
+        0x0018 => PrimitiveKind::U128,
+
+        _ => {
+            warn!(
+                "Unknown primitive type kind: 0x{:04x}, defaulting to Void",
+                kind_value
+            );
+            PrimitiveKind::Void
+        }
+    };
+
+    // Decode indirection mode
+    let indirection = match mode_value {
+        0x0 => None, // Direct
+        0x1 => Some(Indirection::Near16),
+        0x2 => Some(Indirection::Far16),
+        0x3 => Some(Indirection::Huge16),
+        0x4 => Some(Indirection::Near32),
+        0x5 => Some(Indirection::Far32),
+        0x6 => Some(Indirection::Near64),
+        0x7 => Some(Indirection::Near128),
+        _ => {
+            warn!(
+                "Unknown indirection mode: 0x{:x}, defaulting to None",
+                mode_value
+            );
+            None
+        }
+    };
+
+    Ok(Primitive { kind, indirection })
+}
+
 pub fn parse_pdb<P: AsRef<Path>>(
     path: P,
     base_address: Option<usize>,
@@ -177,11 +287,18 @@ pub fn parse_pdb<P: AsRef<Path>>(
     for module in dbi_stream.iter_modules() {
         let module_name = module.module_name;
 
+        // Extract source files from module stream
+        // Note: This requires parsing C13 line data and resolving name indexes through the
+        // names stream. The ms-pdb library doesn't currently provide a high-level API for this,
+        // so we'd need to manually parse FILE_CHECKSUMS subsection and resolve names.
+        // For now, we leave source_files as None to avoid incomplete implementation.
+        let source_files = None;
+
         // Store module info
         output_pdb.debug_modules.push(DebugModule {
             name: String::from_utf8_lossy(module.module_name).into_owned(),
             object_file_name: String::from_utf8_lossy(module.obj_file).into_owned(),
-            source_files: None, // TODO: Parse source files if needed
+            source_files,
         });
 
         // Read module symbols
@@ -258,9 +375,15 @@ fn handle_symbol<'a>(
                 ms_pdb::codeview::syms::SymKind::S_GDATA32
                     | ms_pdb::codeview::syms::SymKind::S_GMANDATA
             );
+            let is_managed = matches!(
+                sym.kind,
+                ms_pdb::codeview::syms::SymKind::S_GMANDATA
+                    | ms_pdb::codeview::syms::SymKind::S_LMANDATA
+            );
             let mut sym: crate::symbol_types::Data =
                 (&data, base_address, type_stream, &output_pdb.types).try_into()?;
             sym.is_global = is_global;
+            sym.is_managed = is_managed;
             if sym.is_global {
                 output_pdb.global_data.push(sym);
             }
@@ -285,13 +408,9 @@ pub(crate) fn handle_type(
 
     // Check if this is a primitive type (built-in type like int, char, etc.)
     if type_stream.is_primitive(idx) {
-        // For primitive types, we create a simple placeholder type
-        // TODO: Properly decode primitive type information from TypeIndex encoding
-        use crate::type_info::{Primitive, PrimitiveKind, Type};
-        let primitive = Primitive {
-            kind: PrimitiveKind::Void, // Placeholder - should decode from idx
-            indirection: None,
-        };
+        // For primitive types, decode the TypeIndex to extract primitive information
+        use crate::type_info::Type;
+        let primitive = decode_primitive_type(idx)?;
         let typ = Rc::new(RefCell::new(Type::Primitive(primitive)));
         output_pdb.types.insert(idx.0, Rc::clone(&typ));
         return Ok(typ);
@@ -324,11 +443,8 @@ pub(crate) fn handle_ipi_type(
 
     // Check if this is a primitive type
     if ipi_stream.is_primitive(idx) {
-        use crate::type_info::{Primitive, PrimitiveKind, Type};
-        let primitive = Primitive {
-            kind: PrimitiveKind::Void,
-            indirection: None,
-        };
+        use crate::type_info::Type;
+        let primitive = decode_primitive_type(idx)?;
         let typ = Rc::new(RefCell::new(Type::Primitive(primitive)));
         output_pdb.ipi_types.insert(idx.0, Rc::clone(&typ));
         return Ok(typ);
@@ -433,19 +549,13 @@ pub(crate) fn handle_type_data(
             Type::UdtSrcLineType(typ)
         }
         TypeData::Unknown => {
-            // Unknown types are not supported by ms-codeview - they represent type kinds
-            // that the library doesn't recognize. Create a placeholder.
-            warn!("Encountered Unknown type - creating placeholder");
-            use crate::type_info::{Primitive, PrimitiveKind};
-            let primitive = Primitive {
-                kind: PrimitiveKind::Void,
-                indirection: None,
-            };
-            Type::Primitive(primitive)
+            // Unknown types represent type kinds that the library doesn't recognize.
+            // Try to get more information from the raw record if possible.
+            warn!("Encountered Unknown type - this may indicate an unsupported type variant");
+            return Err(Error::UnhandledType("Unknown type variant".to_string()));
         }
         _ => {
             warn!("Unhandled type variant: {:?}", typ);
-            // Return a placeholder for unhandled types
             return Err(Error::UnhandledType(format!("{:?}", typ)));
         }
     };

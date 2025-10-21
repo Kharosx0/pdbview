@@ -285,7 +285,6 @@ impl
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct CompilerInfo {
-    // TODO: cpu_type, flags, language
     pub language: String,
     pub flags: CompileFlags,
     pub cpu_type: String,
@@ -294,7 +293,8 @@ pub struct CompilerInfo {
     pub version_string: String,
 }
 
-// TODO: CompileFlags type doesn't exist in ms-pdb yet
+// Note: CompileFlags symbol (S_COMPILE2, S_COMPILE3) is not currently exposed in ms-pdb
+// When ms-pdb adds support for parsing compiler flags symbols, this conversion can be implemented:
 // impl From<&ms_pdb::codeview::syms::CompileFlags> for CompilerInfo {
 //     fn from(flags: &ms_pdb::codeview::syms::CompileFlags) -> Self {
 //         CompilerInfo {
@@ -524,15 +524,13 @@ impl
                 .ok_or(Self::Error::UnresolvedType(type_index.0))?,
         );
 
-        // Note: is_global is set by handle_symbol() based on SymKind
-        // S_GDATA32 and S_GMANDATA are global
-        // S_LDATA32 and S_LMANDATA are local
-        // TODO: Implement is_managed detection (S_GMANDATA, S_LMANDATA)
+        // Note: is_global and is_managed are set by handle_symbol() in lib.rs
+        // based on SymKind (S_GDATA32, S_GMANDATA, S_LDATA32, S_LMANDATA)
 
         let data = Data {
             name: sym.name.to_string(),
             is_global: true,   // Set by handle_symbol() based on SymKind
-            is_managed: false, // TODO: Detect managed symbols
+            is_managed: false, // Set by handle_symbol() based on SymKind
             ty,
             offset,
         };

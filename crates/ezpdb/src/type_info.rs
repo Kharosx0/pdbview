@@ -203,7 +203,10 @@ impl TryFrom<FromClass<'_, '_>> for Class {
         let size = u64::try_from(class.length).unwrap_or(0);
 
         let fields: Vec<TypeRef> = if fields.0 != 0 {
-            // TODO: perhaps change FieldList to Rc<Vec<TypeRef>>?
+            // Extract fields from FieldList type
+            // Note: FieldList.0 is Vec<TypeRef> and we clone it here.
+            // We could optimize this by using Rc<Vec<TypeRef>> but that would require
+            // larger refactoring throughout the codebase. Current approach is simpler.
             if let Type::FieldList(fields_list) =
                 &*crate::handle_type(fields, output_pdb, type_stream)?
                     .as_ref()
@@ -225,10 +228,27 @@ impl TryFrom<FromClass<'_, '_>> for Class {
 
         let unique_name = class.unique_name.map(|s| s.to_string());
 
+        // Determine ClassKind based on available information
+        // In ms-pdb, the Struct type represents LF_STRUCTURE, LF_CLASS, and LF_INTERFACE
+        // Since we can't directly access the leaf type, we use heuristics:
+        // - Interfaces typically have all methods (no data members) and are abstract
+        // - Classes typically have constructors/destructors
+        // - Structs are simpler
+        let kind = if class.name.to_string().starts_with("I") && properties.cnested() {
+            // Heuristic: names starting with 'I' and having nested types might be interfaces
+            ClassKind::Interface
+        } else if properties.ctor() || properties.ovlops() || properties.opassign() {
+            // Has constructors or operator overloads - likely a class
+            ClassKind::Class
+        } else {
+            // Default to struct
+            ClassKind::Struct
+        };
+
         Ok(Class {
             name: class.name.to_string(),
             unique_name,
-            kind: ClassKind::Struct, // Default, would need Leaf type to determine
+            kind,
             properties: properties.try_into()?,
             derived_from,
             fields,
@@ -257,8 +277,17 @@ impl TryFrom<FromBaseClass<'_, '_>> for BaseClass {
 
         let base_class = crate::handle_type(class.ty, output_pdb, type_stream)?;
 
+        // Determine ClassKind from the base class type itself
+        let kind = {
+            let borrowed = base_class.as_ref().borrow();
+            match &*borrowed {
+                Type::Class(c) => c.kind,
+                _ => ClassKind::Struct, // Default if not a class type
+            }
+        };
+
         Ok(BaseClass {
-            kind: ClassKind::Struct, // Default, would need more context to determine
+            kind,
             base_class,
             offset: u64::try_from(class.offset).unwrap_or(0) as usize,
         })
@@ -429,10 +458,11 @@ impl TryFrom<FromBitfield<'_, '_>> for Bitfield {
         // that just wraps the type index
         let underlying_type = crate::handle_type(*type_index, output_pdb, type_stream)?;
 
+        warn!("Bitfield type encountered but ms-pdb doesn't support LF_BITFIELD parsing - returning placeholder with zero len/position");
         Ok(Bitfield {
             underlying_type,
-            len: 0,      // TODO: Extract from raw type record if needed
-            position: 0, // TODO: Extract from raw type record if needed
+            len: 0,      // Would need LF_BITFIELD record parsing in ms-pdb
+            position: 0, // Would need LF_BITFIELD record parsing in ms-pdb
         })
     }
 }
@@ -593,37 +623,60 @@ impl TryFrom<FromPointer<'_, '_>> for Pointer {
             crate::handle_type(pointer.fixed.ty.get(), output_pdb, type_stream).ok();
         let attr = pointer.fixed.attr();
 
-        // Try to extract size, but use a safe fallback if bitfield access panics
-        let size = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| attr.size() as usize))
-            .unwrap_or_else(|_| {
-                // If bitfield access panics, infer size from pointer kind
-                match attr.pointer_kind() {
-                    0..=2 => 2,   // Near16, Far16, Huge16
-                    10 | 11 => 4, // Near32, Far32
-                    12 => 8,      // Ptr64
-                    _ => 8,       // default to 64-bit
-                }
-            });
+        // Extract pointer kind to determine size
+        let pointer_kind_value = attr.pointer_kind();
+
+        // Calculate size based on pointer kind
+        let size = match pointer_kind_value {
+            0 => 2,  // Near16
+            1 => 4,  // Far16 (segment:offset = 2+2)
+            2 => 4,  // Huge16 (segment:offset = 2+2)
+            3 => 4,  // BaseSeg
+            4 => 4,  // BaseVal
+            5 => 4,  // BaseSegVal
+            6 => 4,  // BaseAddr
+            7 => 4,  // BaseSegAddr
+            8 => 4,  // BaseType
+            9 => 4,  // BaseSelf
+            10 => 4, // Near32
+            11 => 6, // Far32 (selector:offset = 2+4)
+            12 => 8, // Ptr64
+            _ => {
+                warn!(
+                    "Unknown pointer kind: {}, defaulting to 8 bytes",
+                    pointer_kind_value
+                );
+                8
+            }
+        };
+
+        let pointer_kind = match pointer_kind_value {
+            0 => PointerKind::Near16,
+            1 => PointerKind::Far16,
+            2 => PointerKind::Huge16,
+            3 => PointerKind::BaseSeg,
+            4 => PointerKind::BaseVal,
+            5 => PointerKind::BaseSegVal,
+            6 => PointerKind::BaseAddr,
+            7 => PointerKind::BaseSegAddr,
+            8 => PointerKind::BaseType,
+            9 => PointerKind::BaseSelf,
+            10 => PointerKind::Near32,
+            11 => PointerKind::Far32,
+            12 => PointerKind::Ptr64,
+            _ => {
+                warn!(
+                    "Unknown pointer kind: {}, defaulting to Ptr64",
+                    pointer_kind_value
+                );
+                PointerKind::Ptr64
+            }
+        };
 
         Ok(Pointer {
             underlying_type,
             attributes: PointerAttributes {
-                kind: match attr.pointer_kind() {
-                    0 => PointerKind::Near16,
-                    1 => PointerKind::Far16,
-                    2 => PointerKind::Huge16,
-                    3 => PointerKind::BaseSeg,
-                    4 => PointerKind::BaseVal,
-                    5 => PointerKind::BaseSegVal,
-                    6 => PointerKind::BaseAddr,
-                    7 => PointerKind::BaseSegAddr,
-                    8 => PointerKind::BaseType,
-                    9 => PointerKind::BaseSelf,
-                    10 => PointerKind::Near32,
-                    11 => PointerKind::Far32,
-                    12 => PointerKind::Ptr64,
-                    _ => PointerKind::Ptr64, // default to 64-bit
-                },
+                kind: pointer_kind,
                 is_volatile: attr.volatile(),
                 is_const: attr.r#const(),
                 is_unaligned: attr.unaligned(),
@@ -663,7 +716,19 @@ impl Typed for PointerKind {
             PointerKind::Near16 | PointerKind::Far16 | PointerKind::Huge16 => 2,
             PointerKind::Near32 | PointerKind::Far32 => 4,
             PointerKind::Ptr64 => 8,
-            other => panic!("type_size() not implemented for pointer type: {:?}", other),
+            other @ (PointerKind::BaseSeg
+            | PointerKind::BaseVal
+            | PointerKind::BaseSegVal
+            | PointerKind::BaseAddr
+            | PointerKind::BaseSegAddr
+            | PointerKind::BaseType
+            | PointerKind::BaseSelf) => {
+                warn!(
+                    "type_size() called for pointer type {:?}, returning 4 bytes",
+                    other
+                );
+                4
+            }
         }
     }
 }
@@ -926,19 +991,19 @@ impl Typed for Array {
             return;
         }
 
-        let mut running_size = self.element_type.as_ref().borrow().type_size(pdb);
+        let element_size = self.element_type.as_ref().borrow().type_size(pdb);
+
+        // Calculate element counts for each dimension
+        // For multi-dimensional arrays, dimensions_bytes contains sizes for each dimension
+        if element_size == 0 {
+            warn!("Array element type has zero size, cannot calculate dimensions");
+            self.dimensions_elements.push(0);
+            return;
+        }
 
         for byte_size in &self.dimensions_bytes {
-            // TODO: may be incorrect behavior
-            if running_size == 0 {
-                continue;
-            }
-
-            let size = *byte_size / running_size;
-
-            self.dimensions_elements.push(size);
-
-            running_size = size;
+            let element_count = *byte_size / element_size;
+            self.dimensions_elements.push(element_count);
         }
     }
 }
@@ -960,13 +1025,29 @@ impl TryFrom<FromArray<'_, '_>> for Array {
             crate::handle_type(array.fixed.index_type.get(), output_pdb, type_stream)?;
         let size = u64::try_from(array.len).unwrap_or(0) as usize;
 
+        // Calculate stride from element type
+        // Stride is the distance between consecutive elements
+        // For basic arrays, this is just the element size
+        let element_size = {
+            let borrowed = element_type.as_ref().borrow();
+            borrowed.type_size(&crate::symbol_types::ParsedPdb::new(
+                std::path::PathBuf::new(),
+            ))
+        };
+
+        let stride = if element_size > 0 {
+            Some(element_size as u32)
+        } else {
+            None
+        };
+
         let arr = Array {
             element_type,
             indexing_type,
-            stride: None, // TODO: Stride calculation not available from Array structure
+            stride,
             size,
-            dimensions_bytes: vec![size], // Simplified: single dimension
-            dimensions_elements: Vec::new(),
+            dimensions_bytes: vec![size],    // Single dimension for now
+            dimensions_elements: Vec::new(), // Filled in on_complete
         };
 
         Ok(arr)
@@ -1017,9 +1098,19 @@ impl TryFrom<FromFieldList<'_, '_>> for FieldList {
                 ms_pdb::codeview::types::fields::Field::BaseClass(base_class) => {
                     let base_type = crate::handle_type(base_class.ty, output_pdb, type_stream)?;
                     let offset = u64::try_from(base_class.offset).unwrap_or(0) as usize;
+
+                    // Determine ClassKind from the base class type itself
+                    let kind = {
+                        let borrowed = base_type.as_ref().borrow();
+                        match &*borrowed {
+                            Type::Class(c) => c.kind,
+                            _ => ClassKind::Struct, // Default if not a class type
+                        }
+                    };
+
                     // Create a Type::BaseClass
                     let base_class_type = Type::BaseClass(BaseClass {
-                        kind: ClassKind::Struct, // Default to Struct
+                        kind,
                         base_class: base_type,
                         offset,
                     });
@@ -1218,9 +1309,11 @@ impl TryFrom<FromProcedure<'_, '_>> for Procedure {
             argument_list: arguments,
             attributes: FunctionAttributes {
                 calling_convention: proc.call,
-                cxx_return_udt: false, // TODO: Extract from call convention if needed
-                is_constructor: false, // Not available in Proc
-                is_constructor_with_virtual_bases: false, // Not available in Proc
+                // cxx_return_udt would be encoded in the calling convention byte
+                // Bit 5 (0x20) indicates C++ return UDT
+                cxx_return_udt: (proc.call & 0x20) != 0,
+                is_constructor: false, // Not directly available in Proc type
+                is_constructor_with_virtual_bases: false, // Not directly available in Proc type
             },
         })
     }
@@ -1289,9 +1382,13 @@ impl TryFrom<FromMemberFunction<'_, '_>> for MemberFunction {
             argument_list: arguments,
             attributes: FunctionAttributes {
                 calling_convention: member.call,
-                cxx_return_udt: false, // TODO: Extract from calling convention if needed
-                is_constructor: false, // Not directly available
-                is_constructor_with_virtual_bases: false, // Not directly available
+                // cxx_return_udt would be encoded in the calling convention byte
+                // Bit 5 (0x20) indicates C++ return UDT
+                cxx_return_udt: (member.call & 0x20) != 0,
+                // Constructor detection could be done by checking if the function name
+                // matches the class name, but we don't have access to the function name here
+                is_constructor: false,
+                is_constructor_with_virtual_bases: false,
             },
             this_adjustment: member.this_adjust.get(),
         })
@@ -1314,8 +1411,12 @@ impl TryFrom<FromMethodList<'_, '_>> for MethodList {
     type Error = Error;
     fn try_from(data: FromMethodList<'_, '_>) -> Result<Self, Self::Error> {
         let (_method_list_data, _type_stream, _output_pdb) = data;
-        // TODO: Parse MethodListData.bytes to extract individual methods
-        // This is complex and would require parsing the byte structure
+
+        // NOTE: MethodListData in ms-pdb doesn't currently provide an iterator
+        // to access individual method list items. This would require parsing the
+        // raw byte data, which is complex. For now, we return an empty list.
+        // This is a known limitation that should be addressed in ms-pdb.
+        warn!("MethodList parsing is not yet fully supported in ms-pdb - returning empty list");
         Ok(MethodList(Vec::new()))
     }
 }
