@@ -258,6 +258,7 @@ dependencies = [
 [[package]]
 name = "ms-codeview"
 version = "0.1.1"
+source = "git+https://github.com/microsoft/pdb-rs.git#0c7869ed01bb91fc3e50d0b103e4ec29ecb9b194"
 dependencies = [
  "anyhow",
  "bitfield",
@@ -273,6 +274,7 @@ dependencies = [
 [[package]]
 name = "ms-pdb"
 version = "0.1.10"
+source = "git+https://github.com/microsoft/pdb-rs.git#0c7869ed01bb91fc3e50d0b103e4ec29ecb9b194"
 dependencies = [
  "anyhow",
  "bitfield",
@@ -295,6 +297,7 @@ dependencies = [
 [[package]]
 name = "ms-pdb-msf"
 version = "0.1.4"
+source = "git+https://github.com/microsoft/pdb-rs.git#0c7869ed01bb91fc3e50d0b103e4ec29ecb9b194"
 dependencies = [
  "anyhow",
  "bitvec",
@@ -310,6 +313,7 @@ dependencies = [
 [[package]]
 name = "ms-pdb-msfz"
 version = "0.1.6"
+source = "git+https://github.com/microsoft/pdb-rs.git#0c7869ed01bb91fc3e50d0b103e4ec29ecb9b194"
 dependencies = [
  "anyhow",
  "flate2",
