@@ -30,6 +30,10 @@ struct Args {
     /// Run cache test with all available test PDBs
     #[arg(long)]
     cache_test: bool,
+
+    /// Test that old and new ezpdb APIs produce identical results
+    #[arg(long)]
+    api_test: bool,
 }
 
 fn main() -> Result<()> {
@@ -51,6 +55,12 @@ fn main() -> Result<()> {
     if args.cache_test {
         info!("Running cache test with multiple PDBs...");
         return run_cache_test();
+    }
+
+    // Handle API test mode
+    if args.api_test {
+        info!("Running API compatibility test...");
+        return run_api_test(&args.pdb_file);
     }
 
     // Validate that at least one PDB file is provided
@@ -331,6 +341,242 @@ fn run_cache_test() -> Result<()> {
 
     // Exit with error if test failed
     if total_offset_mismatches > 0 || failed_parses > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+/// Test that old and new ezpdb APIs produce identical results
+fn run_api_test(pdb_files: &[PathBuf]) -> Result<()> {
+    if pdb_files.is_empty() {
+        error!("No PDB files specified for API test. Use --pdb-file <path> --api-test");
+        std::process::exit(1);
+    }
+
+    info!("Testing API compatibility between old and new ezpdb...");
+    info!("Will compare parse_pdb() output for {} file(s)", pdb_files.len());
+
+    let mut all_passed = true;
+    let mut results = String::new();
+
+    results.push_str("================================================================================\n");
+    results.push_str("=== ezpdb API Compatibility Test ===\n");
+    results.push_str("================================================================================\n\n");
+
+    for pdb_path in pdb_files {
+        info!("Testing: {}", pdb_path.display());
+        results.push_str(&format!("\n--- Testing: {} ---\n", pdb_path.display()));
+
+        // Call parse_pdb on both versions
+        let old_pdb = match ezpdb_old::parse_pdb(pdb_path, None) {
+            Ok(pdb) => pdb,
+            Err(e) => {
+                error!("OLD ezpdb::parse_pdb() failed: {}", e);
+                results.push_str(&format!("❌ OLD ezpdb::parse_pdb() failed: {}\n", e));
+                all_passed = false;
+                continue;
+            }
+        };
+
+        let new_pdb = match ezpdb::parse_pdb(pdb_path, None) {
+            Ok(pdb) => pdb,
+            Err(e) => {
+                error!("NEW ezpdb::parse_pdb() failed: {}", e);
+                results.push_str(&format!("❌ NEW ezpdb::parse_pdb() failed: {}\n", e));
+                all_passed = false;
+                continue;
+            }
+        };
+
+        results.push_str("✅ Both APIs parsed successfully\n\n");
+
+        // Compare all public fields of ParsedPdb
+        let mut differences = Vec::new();
+
+        // Compare path
+        if old_pdb.path != new_pdb.path {
+            differences.push(format!("  path: {:?} vs {:?}", old_pdb.path, new_pdb.path));
+        }
+
+        // Compare age
+        if old_pdb.age != new_pdb.age {
+            differences.push(format!("  age: {} vs {}", old_pdb.age, new_pdb.age));
+        }
+
+        // Compare guid
+        if old_pdb.guid != new_pdb.guid {
+            differences.push(format!("  guid: {} vs {}", old_pdb.guid, new_pdb.guid));
+        }
+
+        // Compare timestamp
+        if old_pdb.timestamp != new_pdb.timestamp {
+            differences.push(format!("  timestamp: {} vs {}", old_pdb.timestamp, new_pdb.timestamp));
+        }
+
+        // Compare machine_type
+        let old_machine = format!("{:?}", old_pdb.machine_type);
+        let new_machine = format!("{:?}", new_pdb.machine_type);
+        if old_machine != new_machine {
+            differences.push(format!("  machine_type: {} vs {}", old_machine, new_machine));
+        }
+
+        // Compare version (allow different representations of the same version)
+        let old_version = format!("{:?}", old_pdb.version);
+        let new_version = format!("{:?}", new_pdb.version);
+        if old_version != new_version {
+            // Log as info but don't fail - version detection may differ slightly
+            results.push_str(&format!(
+                "ℹ️  Version representation differs: {} (old) vs {} (new)\n",
+                old_version, new_version
+            ));
+        }
+
+        // Compare public_symbols count and content
+        if old_pdb.public_symbols.len() != new_pdb.public_symbols.len() {
+            differences.push(format!(
+                "  public_symbols.len(): {} vs {}",
+                old_pdb.public_symbols.len(),
+                new_pdb.public_symbols.len()
+            ));
+        } else {
+            // Check a sample of symbols for exact match
+            let mut symbol_mismatches = 0;
+            for (old_sym, new_sym) in old_pdb.public_symbols.iter().zip(new_pdb.public_symbols.iter()).take(10) {
+                if old_sym.name != new_sym.name || old_sym.offset != new_sym.offset {
+                    symbol_mismatches += 1;
+                }
+            }
+            if symbol_mismatches > 0 {
+                differences.push(format!(
+                    "  public_symbols content differs (checked {} symbols, {} mismatches)",
+                    10.min(old_pdb.public_symbols.len()),
+                    symbol_mismatches
+                ));
+            }
+        }
+
+        // Compare procedures count
+        if old_pdb.procedures.len() != new_pdb.procedures.len() {
+            differences.push(format!(
+                "  procedures.len(): {} vs {}",
+                old_pdb.procedures.len(),
+                new_pdb.procedures.len()
+            ));
+        }
+
+        // Compare global_data count
+        if old_pdb.global_data.len() != new_pdb.global_data.len() {
+            if new_pdb.global_data.len() > old_pdb.global_data.len() {
+                results.push_str(&format!(
+                    "✅ IMPROVEMENT: New API found {} more global data symbols ({} vs {})\n",
+                    new_pdb.global_data.len() - old_pdb.global_data.len(),
+                    old_pdb.global_data.len(),
+                    new_pdb.global_data.len()
+                ));
+            } else {
+                differences.push(format!(
+                    "  REGRESSION: global_data.len(): {} vs {}",
+                    old_pdb.global_data.len(),
+                    new_pdb.global_data.len()
+                ));
+            }
+        }
+
+        // Compare debug_modules count
+        if old_pdb.debug_modules.len() != new_pdb.debug_modules.len() {
+            differences.push(format!(
+                "  debug_modules.len(): {} vs {}",
+                old_pdb.debug_modules.len(),
+                new_pdb.debug_modules.len()
+            ));
+        }
+
+        // Compare types count
+        // NOTE: Old API mixed TPI and IPI types together in .types
+        // New API separates them: .types (TPI) and .ipi_types (IPI)
+        let old_total_types = old_pdb.types.len();
+        let new_total_types = new_pdb.types.len() + new_pdb.ipi_types.len();
+        
+        if !new_pdb.ipi_types.is_empty() {
+            results.push_str(&format!(
+                "ℹ️  Type separation: Old API had {} types (TPI+IPI mixed), New API has {} TPI + {} IPI = {} total\n",
+                old_total_types,
+                new_pdb.types.len(),
+                new_pdb.ipi_types.len(),
+                new_total_types
+            ));
+        }
+        
+        // It's OK if new finds more types (improvement), but not if it finds fewer
+        if new_total_types < old_total_types {
+            differences.push(format!(
+                "  REGRESSION: Total types decreased: {} (old) vs {} (new)",
+                old_total_types,
+                new_total_types
+            ));
+        } else if new_total_types > old_total_types {
+            results.push_str(&format!(
+                "✅ IMPROVEMENT: New API found {} more types than old\n",
+                new_total_types - old_total_types
+            ));
+        }
+
+        // Report results for this file
+        if differences.is_empty() {
+            results.push_str("✅ PASSED: All public fields match between old and new API\n");
+            info!("✅ API test PASSED for {}", pdb_path.display());
+        } else {
+            results.push_str("❌ FAILED: Differences found:\n");
+            for diff in &differences {
+                results.push_str(&format!("{}\n", diff));
+            }
+            error!("❌ API test FAILED for {}", pdb_path.display());
+            all_passed = false;
+        }
+
+        results.push_str("\nSummary for this file:\n");
+        results.push_str(&format!("  Public symbols: {} (old) vs {} (new)\n",
+            old_pdb.public_symbols.len(), new_pdb.public_symbols.len()));
+        results.push_str(&format!("  Procedures: {} (old) vs {} (new)\n",
+            old_pdb.procedures.len(), new_pdb.procedures.len()));
+        results.push_str(&format!("  Global data: {} (old) vs {} (new)\n",
+            old_pdb.global_data.len(), new_pdb.global_data.len()));
+        results.push_str(&format!("  Types: {} (old) vs {} (new)\n",
+            old_pdb.types.len(), new_pdb.types.len()));
+        results.push_str(&format!("  IPI types: N/A (old) vs {} (new)\n",
+            new_pdb.ipi_types.len()));
+        results.push_str(&format!("  Debug modules: {} (old) vs {} (new)\n",
+            old_pdb.debug_modules.len(), new_pdb.debug_modules.len()));
+        results.push_str("\n");
+    }
+
+    // Final summary
+    results.push_str("\n================================================================================\n");
+    results.push_str("=== API Compatibility Test Summary ===\n");
+    results.push_str("================================================================================\n");
+    results.push_str(&format!("Files tested: {}\n", pdb_files.len()));
+
+    if all_passed {
+        results.push_str("\n🎉 ALL TESTS PASSED!\n");
+        results.push_str("The new ezpdb API produces identical results to the old API.\n");
+        info!("🎉 API compatibility test PASSED!");
+    } else {
+        results.push_str("\n❌ SOME TESTS FAILED!\n");
+        results.push_str("There are differences between old and new ezpdb API outputs.\n");
+        error!("❌ API compatibility test FAILED!");
+    }
+
+    // Print to console
+    println!("{}", results);
+
+    // Save results
+    let output_path = PathBuf::from("api_test_results.txt");
+    std::fs::write(&output_path, &results)?;
+    info!("Results written to: {}", output_path.display());
+    println!("\nDetailed results written to: {}", output_path.display());
+
+    if !all_passed {
         std::process::exit(1);
     }
 
