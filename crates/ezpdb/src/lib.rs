@@ -37,7 +37,7 @@ impl<'a> SymbolStream<'a> {
     fn is_global(&self) -> bool {
         matches!(self, SymbolStream::Global(_))
     }
-    
+
     /// Iterator over symbols in the stream
     fn iter_syms(&self) -> Box<dyn Iterator<Item = Sym<'a>> + 'a> {
         match self {
@@ -111,12 +111,12 @@ fn read_section_headers_from_pdb(pdb: &Pdb) -> Option<Vec<ImageSectionHeader>> {
 }
 
 /// Gets section headers for a PDB, using cache if available.
-/// 
+///
 /// This function checks the global cache first. If headers for this PDB's GUID
 /// are not cached, it reads them from the PDB and caches them for future use.
 fn get_section_headers(pdb: &Pdb, guid: uuid::Uuid) -> Option<Vec<ImageSectionHeader>> {
     let cache = get_section_header_cache();
-    
+
     // Try to get from cache first
     {
         let cache_guard = cache.lock().ok()?;
@@ -124,16 +124,16 @@ fn get_section_headers(pdb: &Pdb, guid: uuid::Uuid) -> Option<Vec<ImageSectionHe
             return Some(headers.clone());
         }
     }
-    
+
     // Not in cache, read from PDB
     let headers = read_section_headers_from_pdb(pdb)?;
-    
+
     // Store in cache
     {
         let mut cache_guard = cache.lock().ok()?;
         cache_guard.insert(guid, headers.clone());
     }
-    
+
     Some(headers)
 }
 
@@ -156,7 +156,7 @@ fn section_offset_to_rva(pdb: &Pdb, guid: uuid::Uuid, section: u16, offset: u32)
     }
 
     let section_header = &section_headers[section as usize - 1];
-    
+
     // Use checked_add to avoid overflow
     section_header
         .virtual_address
@@ -463,7 +463,7 @@ fn handle_symbols_for_stream<'a>(
     base_address: Option<usize>,
 ) -> Result<(), Error> {
     let is_global = stream.is_global();
-    
+
     for sym in stream.iter_syms() {
         if let Err(e) = handle_symbol(
             pdb,
@@ -477,7 +477,7 @@ fn handle_symbols_for_stream<'a>(
             trace!("Error handling symbol: {}", e);
         }
     }
-    
+
     Ok(())
 }
 
@@ -539,8 +539,15 @@ fn handle_symbol<'a>(
                 ms_pdb::codeview::syms::SymKind::S_GMANDATA
                     | ms_pdb::codeview::syms::SymKind::S_LMANDATA
             );
-            let mut sym: crate::symbol_types::Data =
-                (pdb, guid, &data, base_address, type_stream, &output_pdb.types).try_into()?;
+            let mut sym: crate::symbol_types::Data = (
+                pdb,
+                guid,
+                &data,
+                base_address,
+                type_stream,
+                &output_pdb.types,
+            )
+                .try_into()?;
             sym.is_global = is_global;
             sym.is_managed = is_managed;
             // Only collect data symbols from global symbol stream (not module streams)

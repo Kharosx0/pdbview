@@ -81,13 +81,35 @@ impl Typed for Type {
             Type::StaticMember(_) => panic!("type_size() invoked for StaticMember"),
             Type::VTable(_) => panic!("type_size() invoked for VTable"),
             Type::BaseClass(_) => panic!("type_size() invoked for BaseClass"),
-            // IPI types don't have a size
-            Type::FuncId(_) => panic!("type_size() invoked for FuncId"),
-            Type::MFuncId(_) => panic!("type_size() invoked for MFuncId"),
-            Type::StringId(_) => panic!("type_size() invoked for StringId"),
-            Type::SubStrList(_) => panic!("type_size() invoked for SubStrList"),
-            Type::BuildInfoType(_) => panic!("type_size() invoked for BuildInfoType"),
-            Type::UdtSrcLineType(_) => panic!("type_size() invoked for UdtSrcLineType"),
+            // IPI types don't have a meaningful size - they're metadata, not data types
+            // Return 0 instead of panicking to handle cases where data symbols accidentally
+            // reference IPI types (shouldn't happen, but ms-pdb might expose them in TPI stream)
+            Type::FuncId(_) => {
+                warn!("type_size() invoked for FuncId - IPI types don't have size, returning 0");
+                0
+            }
+            Type::MFuncId(_) => {
+                warn!("type_size() invoked for MFuncId - IPI types don't have size, returning 0");
+                0
+            }
+            Type::StringId(_) => {
+                warn!("type_size() invoked for StringId - IPI types don't have size, returning 0");
+                0
+            }
+            Type::SubStrList(_) => {
+                warn!(
+                    "type_size() invoked for SubStrList - IPI types don't have size, returning 0"
+                );
+                0
+            }
+            Type::BuildInfoType(_) => {
+                warn!("type_size() invoked for BuildInfoType - IPI types don't have size, returning 0");
+                0
+            }
+            Type::UdtSrcLineType(_) => {
+                warn!("type_size() invoked for UdtSrcLineType - IPI types don't have size, returning 0");
+                0
+            }
         }
     }
 
