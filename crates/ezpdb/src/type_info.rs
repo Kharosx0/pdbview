@@ -145,28 +145,21 @@ pub struct TypeProperties {
 impl TryFrom<ms_pdb::codeview::types::UdtProperties> for TypeProperties {
     type Error = Error;
     fn try_from(props: ms_pdb::codeview::types::UdtProperties) -> Result<Self, Self::Error> {
-        // Use catch_unwind for each bitfield access to handle potential overflow panics
-        use std::panic::{catch_unwind, AssertUnwindSafe};
-
         Ok(TypeProperties {
-            packed: catch_unwind(AssertUnwindSafe(|| props.packed())).unwrap_or(false),
-            constructors: catch_unwind(AssertUnwindSafe(|| props.ctor())).unwrap_or(false),
-            overlapped_operators: catch_unwind(AssertUnwindSafe(|| props.ovlops()))
-                .unwrap_or(false),
-            is_nested_type: catch_unwind(AssertUnwindSafe(|| props.isnested())).unwrap_or(false),
-            contains_nested_types: catch_unwind(AssertUnwindSafe(|| props.cnested()))
-                .unwrap_or(false),
-            overload_assignment: catch_unwind(AssertUnwindSafe(|| props.opassign()))
-                .unwrap_or(false),
-            overload_coasting: catch_unwind(AssertUnwindSafe(|| props.opcast())).unwrap_or(false),
-            forward_reference: catch_unwind(AssertUnwindSafe(|| props.fwdref())).unwrap_or(false),
-            scoped_definition: catch_unwind(AssertUnwindSafe(|| props.scoped())).unwrap_or(false),
-            has_unique_name: catch_unwind(AssertUnwindSafe(|| props.hasuniquename()))
-                .unwrap_or(false),
-            sealed: catch_unwind(AssertUnwindSafe(|| props.sealed())).unwrap_or(false),
-            hfa: catch_unwind(AssertUnwindSafe(|| props.hfa() as u8)).unwrap_or(0),
-            intristic_type: catch_unwind(AssertUnwindSafe(|| props.intrinsic())).unwrap_or(false),
-            mocom: catch_unwind(AssertUnwindSafe(|| props.mocom() as u8)).unwrap_or(0),
+            packed: props.packed(),
+            constructors: props.ctor(),
+            overlapped_operators: props.ovlops(),
+            is_nested_type: props.isnested(),
+            contains_nested_types: props.cnested(),
+            overload_assignment: props.opassign(),
+            overload_coasting: props.opcast(),
+            forward_reference: props.fwdref(),
+            scoped_definition: props.scoped(),
+            has_unique_name: props.hasuniquename(),
+            sealed: props.sealed(),
+            hfa: props.hfa() as u8,
+            intristic_type: props.intrinsic(),
+            mocom: props.mocom() as u8,
         })
     }
 }
@@ -1634,21 +1627,30 @@ impl TryFrom<FromFuncId<'_, '_>> for FuncIdType {
         let (func_id, type_stream, output_pdb) = data;
 
         let function_type = if func_id.fixed.func_type.get().0 != 0 {
-            Some(crate::handle_type(
-                func_id.fixed.func_type.get(),
-                output_pdb,
-                type_stream,
-            )?)
+            let type_idx = func_id.fixed.func_type.get();
+            // FuncId.function_type references a Procedure (TPI type) - check TPI first
+            if let Some(typ) = crate::lookup_tpi_type(type_idx.0, output_pdb) {
+                Some(typ)
+            } else if let Some(typ) = crate::lookup_ipi_type(type_idx.0, output_pdb) {
+                Some(typ)
+            } else {
+                // Not yet parsed - try to parse from TPI stream first, then IPI as fallback
+                // This is a cross-stream reference (IPI -> TPI)
+                None // For now, leave as None if not found
+            }
         } else {
             None
         };
 
         let parent_scope = if func_id.fixed.scope.get() != 0 {
-            Some(crate::handle_type(
-                ms_pdb::codeview::types::TypeIndex(func_id.fixed.scope.get()),
-                output_pdb,
-                type_stream,
-            )?)
+            let type_idx = ms_pdb::codeview::types::TypeIndex(func_id.fixed.scope.get());
+            // FuncId.parent_scope is typically a StringId (IPI type) - ONLY check IPI
+            if let Some(typ) = crate::lookup_ipi_type(type_idx.0, output_pdb) {
+                Some(typ)
+            } else {
+                // Not yet parsed - parse from IPI stream
+                Some(crate::handle_ipi_type(type_idx, output_pdb, type_stream)?)
+            }
         } else {
             None
         };
@@ -1681,21 +1683,29 @@ impl TryFrom<FromMFuncId<'_, '_>> for MFuncIdType {
         let (mfunc_id, type_stream, output_pdb) = data;
 
         let function_type = if mfunc_id.fixed.func_type.get().0 != 0 {
-            Some(crate::handle_type(
-                mfunc_id.fixed.func_type.get(),
-                output_pdb,
-                type_stream,
-            )?)
+            let type_idx = mfunc_id.fixed.func_type.get();
+            // MFuncId.function_type references a MemberFunction (TPI type) - check TPI first
+            if let Some(typ) = crate::lookup_tpi_type(type_idx.0, output_pdb) {
+                Some(typ)
+            } else if let Some(typ) = crate::lookup_ipi_type(type_idx.0, output_pdb) {
+                Some(typ)
+            } else {
+                None // Cross-stream reference
+            }
         } else {
             None
         };
 
         let parent_type = if mfunc_id.fixed.parent_type.get().0 != 0 {
-            Some(crate::handle_type(
-                mfunc_id.fixed.parent_type.get(),
-                output_pdb,
-                type_stream,
-            )?)
+            let type_idx = mfunc_id.fixed.parent_type.get();
+            // MFuncId.parent_type references a Class (TPI type) - check TPI first
+            if let Some(typ) = crate::lookup_tpi_type(type_idx.0, output_pdb) {
+                Some(typ)
+            } else if let Some(typ) = crate::lookup_ipi_type(type_idx.0, output_pdb) {
+                Some(typ)
+            } else {
+                None // Cross-stream reference
+            }
         } else {
             None
         };
@@ -1727,11 +1737,14 @@ impl TryFrom<FromStringId<'_, '_>> for StringIdType {
         let (string_id, type_stream, output_pdb) = data;
 
         let substring = if string_id.id != 0 {
-            Some(crate::handle_type(
-                ms_pdb::codeview::types::TypeIndex(string_id.id),
-                output_pdb,
-                type_stream,
-            )?)
+            let type_idx = ms_pdb::codeview::types::TypeIndex(string_id.id);
+            // StringId.substring is another StringId (IPI type) - ONLY check IPI
+            if let Some(typ) = crate::lookup_ipi_type(type_idx.0, output_pdb) {
+                Some(typ)
+            } else {
+                // Not yet parsed - parse from IPI stream
+                Some(crate::handle_ipi_type(type_idx, output_pdb, type_stream)?)
+            }
         } else {
             None
         };
@@ -1766,11 +1779,14 @@ impl TryFrom<FromSubStrList<'_, '_>> for SubStrListType {
             .map(|id| id.get())
             .filter(|id| *id != 0)
             .map(|id| {
-                crate::handle_type(
-                    ms_pdb::codeview::types::TypeIndex(id),
-                    output_pdb,
-                    type_stream,
-                )
+                let type_idx = ms_pdb::codeview::types::TypeIndex(id);
+                // SubStrList contains StringIds (IPI types) - ONLY check IPI
+                if let Some(typ) = crate::lookup_ipi_type(type_idx.0, output_pdb) {
+                    Ok(typ)
+                } else {
+                    // Not yet parsed - parse from IPI stream
+                    crate::handle_ipi_type(type_idx, output_pdb, type_stream)
+                }
             })
             .collect();
 
@@ -1801,11 +1817,14 @@ impl TryFrom<FromBuildInfo<'_, '_>> for BuildInfoTypeData {
             .map(|id| id.get())
             .filter(|id| *id != 0)
             .map(|id| {
-                crate::handle_type(
-                    ms_pdb::codeview::types::TypeIndex(id),
-                    output_pdb,
-                    type_stream,
-                )
+                let type_idx = ms_pdb::codeview::types::TypeIndex(id);
+                // BuildInfo ONLY references IPI types (StringIds) - ONLY check IPI, never TPI
+                if let Some(typ) = crate::lookup_ipi_type(type_idx.0, output_pdb) {
+                    Ok(typ)
+                } else {
+                    // Not yet parsed - parse from IPI stream
+                    crate::handle_ipi_type(type_idx, output_pdb, type_stream)
+                }
             })
             .collect();
 
@@ -1836,7 +1855,23 @@ impl TryFrom<FromUdtSrcLine<'_, '_>> for UdtSrcLineType {
         // For now, we'll skip the source file lookup and just store the UDT type
         let source_file = None;
 
-        let udt = crate::handle_type(udt_src_line.ty.get(), output_pdb, type_stream)?;
+        // UdtSrcLine wraps a real UDT type. When parsing from IPI stream (where UdtSrcLine lives),
+        // we need to resolve the wrapped UDT type. The wrapped type index might exist in BOTH
+        // TPI and IPI streams (they share the same index space). We should prefer TPI since
+        // UdtSrcLine.udt references a Class/Struct/Union (TPI type) - check TPI first
+        let udt_type_idx = udt_src_line.ty.get();
+        let udt = if let Some(typ) = crate::lookup_tpi_type(udt_type_idx.0, output_pdb) {
+            typ
+        } else if let Some(typ) = crate::lookup_ipi_type(udt_type_idx.0, output_pdb) {
+            typ
+        } else {
+            // Not yet parsed - this is a cross-stream reference (IPI -> TPI)
+            // For now return error since we can't parse TPI from IPI context
+            return Err(Error::UnhandledType(format!(
+                "UdtSrcLine references unparsed UDT at index 0x{:08x}",
+                udt_type_idx.0
+            )));
+        };
 
         Ok(UdtSrcLineType {
             source_file,
@@ -1861,7 +1896,22 @@ impl TryFrom<FromUdtModSrcLine<'_, '_>> for UdtSrcLineType {
         // src is a NameIndex referencing /names stream
         let source_file = None;
 
-        let udt = crate::handle_type(udt_mod_src_line.ty.get(), output_pdb, type_stream)?;
+        // UdtModSrcLine wraps a real UDT type. When parsing from IPI stream (where UdtModSrcLine lives),
+        // we need to resolve the wrapped UDT type. The wrapped type index might exist in BOTH
+        // TPI and IPI streams (they share the same index space). We should prefer TPI since
+        // UdtModSrcLine.udt references a Class/Struct/Union (TPI type) - check TPI first
+        let udt_type_idx = udt_mod_src_line.ty.get();
+        let udt = if let Some(typ) = crate::lookup_tpi_type(udt_type_idx.0, output_pdb) {
+            typ
+        } else if let Some(typ) = crate::lookup_ipi_type(udt_type_idx.0, output_pdb) {
+            typ
+        } else {
+            // Not yet parsed - this is a cross-stream reference (IPI -> TPI)
+            return Err(Error::UnhandledType(format!(
+                "UdtModSrcLine references unparsed UDT at index 0x{:08x}",
+                udt_type_idx.0
+            )));
+        };
 
         Ok(UdtSrcLineType {
             source_file,

@@ -420,6 +420,7 @@ impl
         Option<usize>,
         &ms_pdb::tpi::TypeStream<Vec<u8>>,
         &HashMap<TypeIndexNumber, TypeRef>,
+        &HashMap<TypeIndexNumber, TypeRef>,
     )> for Data
 {
     type Error = crate::error::Error;
@@ -432,9 +433,11 @@ impl
             Option<usize>,
             &ms_pdb::tpi::TypeStream<Vec<u8>>,
             &HashMap<TypeIndexNumber, TypeRef>,
+            &HashMap<TypeIndexNumber, TypeRef>,
         ),
     ) -> Result<Self, Self::Error> {
-        let (pdb, guid, sym, _base_address, _type_stream, parsed_types) = data;
+        let (pdb, guid, sym, _base_address, _type_stream, parsed_tpi_types, parsed_ipi_types) =
+            data;
 
         let offset_segment = sym.header.offset_segment;
         let type_index = sym.header.type_.get();
@@ -447,8 +450,12 @@ impl
             offset_segment.offset.get(),
         );
 
+        // Resolve type index: Data symbols should ONLY reference TPI types (data types)
+        // IPI types are metadata (FuncId, BuildInfo, etc.) and should never be referenced by data symbols
+        // According to LLVM PDB documentation, TPI contains actual types (int, struct, pointer, etc.)
+        // while IPI contains metadata (function IDs, source line info, etc.)
         let ty = Rc::clone(
-            parsed_types
+            parsed_tpi_types
                 .get(&type_index.0)
                 .ok_or(Self::Error::UnresolvedType(type_index.0))?,
         );

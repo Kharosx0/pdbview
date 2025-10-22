@@ -24,6 +24,26 @@ pub mod type_info;
 
 pub use crate::symbol_types::ParsedPdb;
 
+/// Helper to look up a type from TPI HashMap ONLY - enforces no IPI contamination
+pub(crate) fn lookup_tpi_type(idx: u32, output_pdb: &ParsedPdb) -> Option<TypeRef> {
+    output_pdb.types.get(&idx).map(Rc::clone)
+}
+
+/// Helper to look up a type from IPI HashMap ONLY - enforces no TPI contamination
+pub(crate) fn lookup_ipi_type(idx: u32, output_pdb: &ParsedPdb) -> Option<TypeRef> {
+    output_pdb.ipi_types.get(&idx).map(Rc::clone)
+}
+
+/// Helper to insert a type into TPI HashMap ONLY
+pub(crate) fn insert_tpi_type(idx: u32, typ: TypeRef, output_pdb: &mut ParsedPdb) {
+    output_pdb.types.insert(idx, typ);
+}
+
+/// Helper to insert a type into IPI HashMap ONLY
+pub(crate) fn insert_ipi_type(idx: u32, typ: TypeRef, output_pdb: &mut ParsedPdb) {
+    output_pdb.ipi_types.insert(idx, typ);
+}
+
 /// Represents a symbol stream that can be iterated
 enum SymbolStream<'a> {
     /// Global symbol stream (GSS) - contains public symbols and data symbols
@@ -546,6 +566,7 @@ fn handle_symbol<'a>(
                 base_address,
                 type_stream,
                 &output_pdb.types,
+                &output_pdb.ipi_types,
             )
                 .try_into()?;
             sym.is_global = is_global;
@@ -564,23 +585,24 @@ fn handle_symbol<'a>(
     Ok(())
 }
 
-/// Converts a type index to our internal type representation
+/// Converts a TPI type index to our internal type representation
+/// ONLY accesses TPI HashMap - enforces no IPI contamination
 pub(crate) fn handle_type(
     idx: TypeIndex,
     output_pdb: &mut ParsedPdb,
     type_stream: &ms_pdb::tpi::TypeStream<Vec<u8>>,
 ) -> Result<TypeRef, Error> {
-    if let Some(typ) = output_pdb.types.get(&idx.0) {
-        return Ok(Rc::clone(typ));
+    // ONLY check TPI HashMap
+    if let Some(typ) = lookup_tpi_type(idx.0, output_pdb) {
+        return Ok(typ);
     }
 
     // Check if this is a primitive type (built-in type like int, char, etc.)
     if type_stream.is_primitive(idx) {
-        // For primitive types, decode the TypeIndex to extract primitive information
         use crate::type_info::Type;
         let primitive = decode_primitive_type(idx)?;
         let typ = Rc::new(RefCell::new(Type::Primitive(primitive)));
-        output_pdb.types.insert(idx.0, Rc::clone(&typ));
+        insert_tpi_type(idx.0, Rc::clone(&typ), output_pdb);
         return Ok(typ);
     }
 
@@ -593,20 +615,21 @@ pub(crate) fn handle_type(
 
     let typ = handle_type_data(&parsed_type, output_pdb, type_stream)?;
 
-    output_pdb.types.insert(idx.0, Rc::clone(&typ));
+    insert_tpi_type(idx.0, Rc::clone(&typ), output_pdb);
 
     Ok(typ)
 }
 
-/// Converts an IPI type index to our internal type representation (stored in ipi_types HashMap)
+/// Converts an IPI type index to our internal type representation
+/// ONLY accesses IPI HashMap - enforces no TPI contamination
 pub(crate) fn handle_ipi_type(
     idx: TypeIndex,
     output_pdb: &mut ParsedPdb,
     ipi_stream: &ms_pdb::tpi::TypeStream<Vec<u8>>,
 ) -> Result<TypeRef, Error> {
-    // Check if already parsed
-    if let Some(typ) = output_pdb.ipi_types.get(&idx.0) {
-        return Ok(Rc::clone(typ));
+    // ONLY check IPI HashMap
+    if let Some(typ) = lookup_ipi_type(idx.0, output_pdb) {
+        return Ok(typ);
     }
 
     // Check if this is a primitive type
@@ -614,7 +637,7 @@ pub(crate) fn handle_ipi_type(
         use crate::type_info::Type;
         let primitive = decode_primitive_type(idx)?;
         let typ = Rc::new(RefCell::new(Type::Primitive(primitive)));
-        output_pdb.ipi_types.insert(idx.0, Rc::clone(&typ));
+        insert_ipi_type(idx.0, Rc::clone(&typ), output_pdb);
         return Ok(typ);
     }
 
@@ -625,14 +648,15 @@ pub(crate) fn handle_ipi_type(
         .parse()
         .map_err(|e| anyhow::anyhow!("Failed to parse IPI type record: {:?}", e))?;
 
-    // Convert using handle_type_data (same conversion logic, just store in ipi_types)
-    let typ = handle_type_data(&parsed_type, output_pdb, ipi_stream)?;
+    // Convert using handle_ipi_type_data (IPI-specific conversion logic)
+    let typ = handle_ipi_type_data(&parsed_type, output_pdb, ipi_stream)?;
 
-    output_pdb.ipi_types.insert(idx.0, Rc::clone(&typ));
+    insert_ipi_type(idx.0, Rc::clone(&typ), output_pdb);
 
     Ok(typ)
 }
 
+/// Handle TPI type data - only accesses TPI HashMap
 pub(crate) fn handle_type_data(
     typ: &TypeData,
     output_pdb: &mut ParsedPdb,
@@ -685,45 +709,78 @@ pub(crate) fn handle_type_data(
             let typ = (data, type_stream, output_pdb).try_into()?;
             Type::MethodList(typ)
         }
-        // IPI stream types
-        TypeData::FuncId(data) => {
-            let typ = (data, type_stream, output_pdb).try_into()?;
-            Type::FuncId(typ)
-        }
-        TypeData::MFuncId(data) => {
-            let typ = (data, type_stream, output_pdb).try_into()?;
-            Type::MFuncId(typ)
-        }
-        TypeData::StringId(data) => {
-            let typ = (data, type_stream, output_pdb).try_into()?;
-            Type::StringId(typ)
-        }
-        TypeData::SubStrList(data) => {
-            let typ = (data, type_stream, output_pdb).try_into()?;
-            Type::SubStrList(typ)
-        }
-        TypeData::BuildInfo(data) => {
-            let typ = (data, type_stream, output_pdb).try_into()?;
-            Type::BuildInfoType(typ)
-        }
-        TypeData::UdtSrcLine(data) => {
-            let typ = (*data, type_stream, output_pdb).try_into()?;
-            Type::UdtSrcLineType(typ)
-        }
-        TypeData::UdtModSrcLine(data) => {
-            // UdtModSrcLine is similar to UdtSrcLine but includes module index
-            // We'll convert it to UdtSrcLineType (ignoring module index for now)
-            let typ = (*data, type_stream, output_pdb).try_into()?;
-            Type::UdtSrcLineType(typ)
+        // IPI types should NOT appear in TPI stream
+        TypeData::FuncId(_)
+        | TypeData::MFuncId(_)
+        | TypeData::StringId(_)
+        | TypeData::SubStrList(_)
+        | TypeData::BuildInfo(_)
+        | TypeData::UdtSrcLine(_)
+        | TypeData::UdtModSrcLine(_) => {
+            return Err(Error::UnhandledType(
+                "IPI type found in TPI stream - this should not happen!".to_string(),
+            ))
         }
         TypeData::Unknown => {
-            // Unknown types represent type kinds that the library doesn't recognize.
-            // Try to get more information from the raw record if possible.
             trace!("Encountered Unknown type - this may indicate an unsupported type variant");
             return Err(Error::UnhandledType("Unknown type variant".to_string()));
         }
         _ => {
             trace!("Unhandled type variant: {:?}", typ);
+            return Err(Error::UnhandledType(format!("{:?}", typ)));
+        }
+    };
+
+    Ok(Rc::new(RefCell::new(result_typ)))
+}
+
+/// Handle IPI type data - only accesses IPI HashMap
+pub(crate) fn handle_ipi_type_data(
+    typ: &TypeData,
+    output_pdb: &mut ParsedPdb,
+    ipi_stream: &ms_pdb::tpi::TypeStream<Vec<u8>>,
+) -> Result<TypeRef, Error> {
+    use crate::type_info::Type;
+
+    let result_typ = match typ {
+        // Pure IPI types
+        TypeData::FuncId(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::FuncId(typ)
+        }
+        TypeData::MFuncId(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::MFuncId(typ)
+        }
+        TypeData::StringId(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::StringId(typ)
+        }
+        TypeData::SubStrList(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::SubStrList(typ)
+        }
+        TypeData::BuildInfo(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::BuildInfoType(typ)
+        }
+        TypeData::UdtSrcLine(data) => {
+            let typ = (*data, ipi_stream, output_pdb).try_into()?;
+            Type::UdtSrcLineType(typ)
+        }
+        TypeData::UdtModSrcLine(data) => {
+            // UdtModSrcLine is similar to UdtSrcLine but includes module index
+            // We'll convert it to UdtSrcLineType (ignoring module index for now)
+            let typ = (*data, ipi_stream, output_pdb).try_into()?;
+            Type::UdtSrcLineType(typ)
+        }
+        TypeData::Unknown => {
+            // Unknown types represent type kinds that the library doesn't recognize.
+            trace!("Encountered Unknown type in IPI stream - this may indicate an unsupported type variant");
+            return Err(Error::UnhandledType("Unknown type variant".to_string()));
+        }
+        _ => {
+            trace!("Unhandled IPI type variant: {:?}", typ);
             return Err(Error::UnhandledType(format!("{:?}", typ)));
         }
     };
