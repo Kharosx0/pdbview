@@ -13,7 +13,7 @@ name = "pdbview"
 path = "crates/bin/main.rs"
 
 [workspace]
-members = ['crates/ezpdb', "crates/pdb-compare"]
+members = ['crates/ezpdb', "crates/pdb-compare", 'crates/ms-pdb/codeview', 'crates/ms-pdb/msf', 'crates/ms-pdb/msfz', 'crates/ms-pdb/pdb']
 
 [dependencies]
 pdb = "0.8"
@@ -24,3 +24,35 @@ ezpdb = { version = "0.6", path = "crates/ezpdb", features = ['serde'] }
 simplelog = "0.12"
 anyhow = "1.0"
 serde_json = "1.0"
+
+[patch.'https://github.com/microsoft/pdb-rs.git']
+ms-pdb = { path = "crates/ms-pdb/pdb" }
+ms-codeview = { path = "crates/ms-pdb/codeview" }
+ms-pdb-msf = { path = "crates/ms-pdb/msf" }
+ms-pdb-msfz = { path = "crates/ms-pdb/msfz" }
+
+
+[workspace.dependencies]
+anyhow = "1.0.71"
+bitfield = "0.14.0"
+bitflags = "2.3.2"
+bitvec = "1"
+bstr = "1.8.0"
+bumpalo = "3.13.0"
+cc = "1.0.79"
+clap = "4.5.27"
+dbg-ranges = "0.1.0"
+flate2 = "1.0.27"
+pow2 = "0.1.1"
+pretty-hex = "0.4.1"
+static_assertions = "1.0"
+static_init = "1.0.3"
+sync_file = "0.2.6"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
+tracing-tracy = "0.11.4"
+uuid = "1.4.0"
+zerocopy = "0.8.14"
+zerocopy-derive = "0.8.14"
+zstd = "0.13.2"
+

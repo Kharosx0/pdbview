@@ -1,1 +1,42 @@
 /target
+
+# AI Review and Summary Documents (local only, not for upstream)
+ACCOMPLISHMENT_SUMMARY.md
+CLEANUP_SUMMARY.md
+CODE_REVIEW_SUMMARY.md
+CONTENT_VALIDATION_REPORT.md
+DOCUMENTATION_VERIFICATION.md
+DOC_VERIFICATION_SUMMARY.md
+EZPDB_CODE_REVIEW.md
+EZPDB_REVIEW_SUMMARY.md
+MANUAL_VERIFICATION.md
+REFACTORING_COMPLETE.md
+REFACTORING_SUMMARY.txt
+REVIEW_QUICK_REF.md
+STATUS_REPORT.md
+TESTING_COMPLETE.md
+TPI_IPI_PARSING_TEST_REPORT.md
+TPI_IPI_SEPARATION_REFACTORING.md
+TYPE_PARSING_COMPLETION.md
+TYPE_REFERENCE_GUIDE.md
+VERIFICATION_SUMMARY.md
+
+# Test result files
+api_test_results.txt
+cache_test_results.txt
+error.txt
+test_ezpdb_example.exe
+test_ezpdb_example.pdb
+
+# pdb-compare test results
+crates/pdb-compare/api_test_results.txt
+crates/pdb-compare/cache_test_results.txt
+crates/pdb-compare/error.txt
+
+# pdb-compare AI documentation (local only)
+crates/pdb-compare/BUG_REPORT.md
+crates/pdb-compare/IPI_BUG_FIX_SUMMARY.md
+crates/pdb-compare/IPI_DATA_SYMBOL_INVESTIGATION.md
+crates/pdb-compare/MS_PDB_BITFIELD_BUG_ANALYSIS.md
+crates/pdb-compare/PR_DESCRIPTION.md
+crates/pdb-compare/TESTING_GUIDE.md

@@ -8,6 +8,8 @@ edition = "2021"
 ezpdb = { path = "../ezpdb" }
 # Old ezpdb using pdb crate 0.8 (from GitHub)
 ezpdb-old = { package = "ezpdb", git = "https://github.com/landaire/pdbview", branch = "master" }
+# Direct ms-pdb access for deep investigation
+ms-pdb = { path = "../ms-pdb/pdb" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
