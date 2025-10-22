@@ -709,6 +709,18 @@ pub(crate) fn handle_type_data(
             let typ = (data, type_stream, output_pdb).try_into()?;
             Type::MethodList(typ)
         }
+        TypeData::Alias(data) => {
+            let typ = (data, type_stream, output_pdb).try_into()?;
+            Type::Alias(typ)
+        }
+        TypeData::VTableShape(data) => {
+            let typ = (data, type_stream, output_pdb).try_into()?;
+            Type::VTableShape(typ)
+        }
+        TypeData::VFTable(data) => {
+            let typ = (*data, type_stream, output_pdb).try_into()?;
+            Type::VFTableType(typ)
+        }
         // IPI types should NOT appear in TPI stream
         TypeData::FuncId(_)
         | TypeData::MFuncId(_)
@@ -724,10 +736,6 @@ pub(crate) fn handle_type_data(
         TypeData::Unknown => {
             trace!("Encountered Unknown type - this may indicate an unsupported type variant");
             return Err(Error::UnhandledType("Unknown type variant".to_string()));
-        }
-        _ => {
-            trace!("Unhandled type variant: {:?}", typ);
-            return Err(Error::UnhandledType(format!("{:?}", typ)));
         }
     };
 
@@ -774,14 +782,68 @@ pub(crate) fn handle_ipi_type_data(
             let typ = (*data, ipi_stream, output_pdb).try_into()?;
             Type::UdtSrcLineType(typ)
         }
+        // TPI types may appear in IPI stream as cross-references
+        // Handle them by delegating to handle_type_data logic
+        TypeData::Struct(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::Class(typ)
+        }
+        TypeData::Union(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::Union(typ)
+        }
+        TypeData::Array(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::Array(typ)
+        }
+        TypeData::Enum(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::Enumeration(typ)
+        }
+        TypeData::Pointer(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::Pointer(typ)
+        }
+        TypeData::Modifier(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::Modifier(typ)
+        }
+        TypeData::FieldList(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::FieldList(typ)
+        }
+        TypeData::ArgList(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::ArgumentList(typ)
+        }
+        TypeData::Proc(data) => {
+            let typ = (*data, ipi_stream, output_pdb).try_into()?;
+            Type::Procedure(typ)
+        }
+        TypeData::MemberFunc(data) => {
+            let typ = (*data, ipi_stream, output_pdb).try_into()?;
+            Type::MemberFunction(typ)
+        }
+        TypeData::MethodList(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::MethodList(typ)
+        }
+        TypeData::Alias(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::Alias(typ)
+        }
+        TypeData::VTableShape(data) => {
+            let typ = (data, ipi_stream, output_pdb).try_into()?;
+            Type::VTableShape(typ)
+        }
+        TypeData::VFTable(data) => {
+            let typ = (*data, ipi_stream, output_pdb).try_into()?;
+            Type::VFTableType(typ)
+        }
         TypeData::Unknown => {
             // Unknown types represent type kinds that the library doesn't recognize.
             trace!("Encountered Unknown type in IPI stream - this may indicate an unsupported type variant");
             return Err(Error::UnhandledType("Unknown type variant".to_string()));
-        }
-        _ => {
-            trace!("Unhandled IPI type variant: {:?}", typ);
-            return Err(Error::UnhandledType(format!("{:?}", typ)));
         }
     };
 

@@ -43,6 +43,9 @@ pub enum Type {
     StaticMember(StaticMember),
     BaseClass(BaseClass),
     VTable(VTable),
+    Alias(Alias),
+    VTableShape(VTableShape),
+    VFTableType(VFTableType),
     // IPI stream types
     FuncId(FuncIdType),
     MFuncId(MFuncIdType),
@@ -81,6 +84,9 @@ impl Typed for Type {
             Type::StaticMember(_) => panic!("type_size() invoked for StaticMember"),
             Type::VTable(_) => panic!("type_size() invoked for VTable"),
             Type::BaseClass(_) => panic!("type_size() invoked for BaseClass"),
+            Type::Alias(alias) => alias.underlying_type.borrow().type_size(pdb),
+            Type::VTableShape(_) => panic!("type_size() invoked for VTableShape"),
+            Type::VFTableType(_) => panic!("type_size() invoked for VFTableType"),
             // IPI types don't have a meaningful size - they're metadata, not data types
             // Return 0 instead of panicking to handle cases where data symbols accidentally
             // reference IPI types (shouldn't happen, but ms-pdb might expose them in TPI stream)
@@ -1680,7 +1686,7 @@ type FromMFuncId<'a, 'b> = (
 impl TryFrom<FromMFuncId<'_, '_>> for MFuncIdType {
     type Error = Error;
     fn try_from(data: FromMFuncId<'_, '_>) -> Result<Self, Self::Error> {
-        let (mfunc_id, type_stream, output_pdb) = data;
+        let (mfunc_id, _type_stream, output_pdb) = data;
 
         let function_type = if mfunc_id.fixed.func_type.get().0 != 0 {
             let type_idx = mfunc_id.fixed.func_type.get();
@@ -1849,7 +1855,7 @@ type FromUdtSrcLine<'a, 'b> = (
 impl TryFrom<FromUdtSrcLine<'_, '_>> for UdtSrcLineType {
     type Error = Error;
     fn try_from(data: FromUdtSrcLine<'_, '_>) -> Result<Self, Self::Error> {
-        let (udt_src_line, type_stream, output_pdb) = data;
+        let (udt_src_line, _type_stream, output_pdb) = data;
 
         // src is a NameIndex, not a TypeIndex - it references the /names stream, not type stream
         // For now, we'll skip the source file lookup and just store the UDT type
@@ -1890,7 +1896,7 @@ type FromUdtModSrcLine<'a, 'b> = (
 impl TryFrom<FromUdtModSrcLine<'_, '_>> for UdtSrcLineType {
     type Error = Error;
     fn try_from(data: FromUdtModSrcLine<'_, '_>) -> Result<Self, Self::Error> {
-        let (udt_mod_src_line, type_stream, output_pdb) = data;
+        let (udt_mod_src_line, _type_stream, output_pdb) = data;
 
         // Similar to UdtSrcLine, but includes module index (imod)
         // src is a NameIndex referencing /names stream
@@ -1917,6 +1923,127 @@ impl TryFrom<FromUdtModSrcLine<'_, '_>> for UdtSrcLineType {
             source_file,
             line_number: udt_mod_src_line.line.get(),
             udt,
+        })
+    }
+}
+
+// ============================================================================
+// Alias Type (LF_ALIAS) - TPI Stream
+// ============================================================================
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+pub struct Alias {
+    pub name: String,
+    pub underlying_type: TypeRef,
+}
+
+impl Typed for Alias {
+    fn type_size(&self, pdb: &ParsedPdb) -> usize {
+        self.underlying_type.borrow().type_size(pdb)
+    }
+}
+
+type FromAlias<'a, 'b> = (
+    &'b ms_pdb::codeview::types::Alias<'a>,
+    &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
+    &'b mut crate::symbol_types::ParsedPdb,
+);
+
+impl TryFrom<FromAlias<'_, '_>> for Alias {
+    type Error = Error;
+    fn try_from(data: FromAlias<'_, '_>) -> Result<Self, Self::Error> {
+        let (alias, type_stream, output_pdb) = data;
+
+        let underlying_type = crate::handle_type(alias.utype, output_pdb, type_stream)?;
+
+        Ok(Alias {
+            name: alias.name.to_string(),
+            underlying_type,
+        })
+    }
+}
+
+// ============================================================================
+// VTableShape Type (LF_VTSHAPE) - TPI Stream
+// ============================================================================
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+pub struct VTableShape {
+    pub count: u16,
+    pub descriptors: Vec<u8>,
+}
+
+impl Typed for VTableShape {
+    fn type_size(&self, _pdb: &ParsedPdb) -> usize {
+        // VTableShape describes virtual function table layout
+        // Size is count * pointer_size (typically 4 or 8 bytes per entry)
+        // We'll assume 8 bytes for 64-bit (modern systems)
+        self.count as usize * 8
+    }
+}
+
+type FromVTableShape<'a, 'b> = (
+    &'b ms_pdb::codeview::types::VTableShapeData<'a>,
+    &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
+    &'b mut crate::symbol_types::ParsedPdb,
+);
+
+impl TryFrom<FromVTableShape<'_, '_>> for VTableShape {
+    type Error = Error;
+    fn try_from(data: FromVTableShape<'_, '_>) -> Result<Self, Self::Error> {
+        let (vtshape, _type_stream, _output_pdb) = data;
+
+        Ok(VTableShape {
+            count: vtshape.count,
+            descriptors: vtshape.descriptors.to_vec(),
+        })
+    }
+}
+
+// ============================================================================
+// VFTable Type (LF_VFTABLE) - TPI Stream
+// ============================================================================
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+pub struct VFTableType {
+    pub root: TypeRef,
+    pub path: TypeRef,
+    pub offset: u32,
+    pub segment: u16,
+}
+
+impl Typed for VFTableType {
+    fn type_size(&self, _pdb: &ParsedPdb) -> usize {
+        // VFTable is a pointer to a virtual function table
+        // Size is typically pointer size (8 bytes on 64-bit)
+        8
+    }
+}
+
+type FromVFTable<'a, 'b> = (
+    &'a ms_pdb::codeview::types::VFTable,
+    &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
+    &'b mut crate::symbol_types::ParsedPdb,
+);
+
+impl TryFrom<FromVFTable<'_, '_>> for VFTableType {
+    type Error = Error;
+    fn try_from(data: FromVFTable<'_, '_>) -> Result<Self, Self::Error> {
+        let (vftable, type_stream, output_pdb) = data;
+
+        // VFTable doesn't implement Copy, but it's a simple struct with Copy fields
+        // Access fields directly from the reference
+        let root = crate::handle_type(vftable.root.get(), output_pdb, type_stream)?;
+        let path = crate::handle_type(vftable.path.get(), output_pdb, type_stream)?;
+
+        Ok(VFTableType {
+            root,
+            path,
+            offset: vftable.off.get(),
+            segment: vftable.seg.get(),
         })
     }
 }

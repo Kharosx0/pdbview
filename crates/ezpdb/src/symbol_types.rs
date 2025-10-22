@@ -436,7 +436,7 @@ impl
             &HashMap<TypeIndexNumber, TypeRef>,
         ),
     ) -> Result<Self, Self::Error> {
-        let (pdb, guid, sym, _base_address, _type_stream, parsed_tpi_types, parsed_ipi_types) =
+        let (pdb, guid, sym, _base_address, _type_stream, parsed_tpi_types, _parsed_ipi_types) =
             data;
 
         let offset_segment = sym.header.offset_segment;
