@@ -294,6 +294,35 @@ fn decode_primitive_type(
     Ok(Primitive { kind, indirection })
 }
 
+/// Parses a PDB file and extracts all type and symbol information.
+///
+/// This is the main entry point for the ezpdb library. It reads a PDB file and returns
+/// a structured representation containing all types (from TPI and IPI streams), symbols,
+/// procedures, and debug information.
+///
+/// # Arguments
+/// * `path` - Path to the PDB file to parse
+/// * `base_address` - Optional base address for RVA calculation. If `None`, RVAs are relative
+///   to the image base. If `Some(addr)`, RVAs are adjusted by this base address.
+///
+/// # Returns
+/// A `ParsedPdb` containing all extracted information, or an error if parsing fails.
+///
+/// # Errors
+/// * `Error::IoError` - If the file cannot be read
+/// * `Error::PdbCrateError` - If the PDB format is invalid or corrupted
+///
+/// # Example
+/// ```no_run
+/// use ezpdb::parse_pdb;
+///
+/// # fn main() -> Result<(), ezpdb::error::Error> {
+/// let pdb = parse_pdb("ntdll.pdb", None)?;
+/// println!("Found {} types", pdb.types.len());
+/// println!("Found {} procedures", pdb.procedures.len());
+/// # Ok(())
+/// # }
+/// ```
 pub fn parse_pdb<P: AsRef<Path>>(
     path: P,
     base_address: Option<usize>,
@@ -365,7 +394,7 @@ pub fn parse_pdb<P: AsRef<Path>>(
             Err(e) => {
                 // Log errors
                 parse_errors += 1;
-                if parse_errors <= 10 || typ_idx.0 == 6219 {
+                if parse_errors <= 10 {
                     warn!("Could not parse type {:?}: {}", typ_idx, e);
                 } else if parse_errors == 11 {
                     warn!("(suppressing further error messages, total will be shown at end)");

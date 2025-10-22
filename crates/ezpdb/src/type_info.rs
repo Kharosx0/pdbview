@@ -1613,11 +1613,19 @@ impl TryFrom<FromVirtualFunctionTablePointer<'_, '_>> for VTable {
 // IPI Stream Types
 // ============================================================================
 
+/// Represents a function identifier from the IPI (ID Program Information) stream.
+///
+/// FuncId records store metadata about functions, including their name and type signature.
+/// These are used for linking symbols to their type information and for organizing
+/// functions within their parent scopes (namespaces, classes, etc.).
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct FuncIdType {
+    /// The name of the function
     pub name: String,
+    /// The function's type signature (if available)
     pub function_type: Option<TypeRef>,
+    /// The parent scope containing this function (namespace, class, etc.)
     pub parent_scope: Option<TypeRef>,
 }
 
@@ -1669,11 +1677,18 @@ impl TryFrom<FromFuncId<'_, '_>> for FuncIdType {
     }
 }
 
+/// Represents a member function identifier from the IPI stream.
+///
+/// Similar to `FuncIdType`, but specifically for class/struct member functions.
+/// Contains the member function's name, type signature, and parent class.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct MFuncIdType {
+    /// The name of the member function
     pub name: String,
+    /// The member function's type signature (if available)
     pub function_type: Option<TypeRef>,
+    /// The parent class/struct that owns this member function
     pub parent_type: Option<TypeRef>,
 }
 
@@ -1724,10 +1739,17 @@ impl TryFrom<FromMFuncId<'_, '_>> for MFuncIdType {
     }
 }
 
+/// Represents a string identifier from the IPI stream.
+///
+/// StringId records store string values used in build information, source paths,
+/// compiler arguments, and other metadata. Strings can be hierarchical, where
+/// one string references another as a substring.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct StringIdType {
+    /// The string value
     pub id: String,
+    /// Optional reference to another string that this string extends or modifies
     pub substring: Option<TypeRef>,
 }
 
@@ -1762,9 +1784,14 @@ impl TryFrom<FromStringId<'_, '_>> for StringIdType {
     }
 }
 
+/// Represents a list of string identifiers from the IPI stream.
+///
+/// SubStrList is used to group multiple StringId records together, typically
+/// for representing lists of paths, arguments, or other string collections.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct SubStrListType {
+    /// List of string identifiers
     pub strings: Vec<TypeRef>,
 }
 
@@ -1800,9 +1827,21 @@ impl TryFrom<FromSubStrList<'_, '_>> for SubStrListType {
     }
 }
 
+/// Represents build information from the IPI stream.
+///
+/// BuildInfo records contain metadata about how the binary was compiled,
+/// including:
+/// - Current directory during compilation
+/// - Compiler executable path
+/// - Source file paths
+/// - PDB output path
+/// - Command line arguments
+///
+/// Each item is typically a `StringId` reference.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct BuildInfoTypeData {
+    /// List of build information items (typically 5 items: cwd, compiler, source, pdb, cmdline)
     pub items: Vec<TypeRef>,
 }
 
@@ -1838,11 +1877,19 @@ impl TryFrom<FromBuildInfo<'_, '_>> for BuildInfoTypeData {
     }
 }
 
+/// Represents source line information for a user-defined type (UDT) from the IPI stream.
+///
+/// UdtSrcLine records link a class, struct, union, or enum definition to its
+/// source code location. This allows debuggers to navigate from a type to where
+/// it was defined in the source code.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct UdtSrcLineType {
+    /// Reference to the source file StringId (if available)
     pub source_file: Option<TypeRef>,
+    /// Line number in the source file where the UDT is defined
     pub line_number: u32,
+    /// Reference to the user-defined type (class, struct, union, or enum)
     pub udt: TypeRef,
 }
 
@@ -1931,10 +1978,18 @@ impl TryFrom<FromUdtModSrcLine<'_, '_>> for UdtSrcLineType {
 // Alias Type (LF_ALIAS) - TPI Stream
 // ============================================================================
 
+/// Represents a type alias (typedef in C/C++).
+///
+/// This type creates an alternate name for an existing type. For example:
+/// ```c
+/// typedef int MyInt;  // Creates an Alias with name="MyInt", underlying_type=int
+/// ```
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Alias {
+    /// The name of the alias (e.g., "MyInt" for `typedef int MyInt`)
     pub name: String,
+    /// The underlying type that this alias refers to
     pub underlying_type: TypeRef,
 }
 
@@ -1968,10 +2023,27 @@ impl TryFrom<FromAlias<'_, '_>> for Alias {
 // VTableShape Type (LF_VTSHAPE) - TPI Stream
 // ============================================================================
 
+/// Describes the shape of a virtual function table (vtable).
+///
+/// A vtable shape defines how many virtual functions exist and their calling conventions.
+/// Each virtual function slot is described by a 4-bit descriptor (nibble) packed into bytes.
+///
+/// The descriptors encode calling conventions:
+/// - 0x00: Near
+/// - 0x01: Far
+/// - 0x02: Thin
+/// - 0x03: Outer (adjustor thunk)
+/// - 0x04: Meta (for virtual bases)
+/// - 0x05: Near32
+/// - 0x06: Far32
+/// - And others...
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct VTableShape {
+    /// Number of virtual function entries in the vtable
     pub count: u16,
+    /// Packed 4-bit descriptors for each virtual function's calling convention.
+    /// Contains `(count + 1) / 2` bytes, with potential padding for alignment.
     pub descriptors: Vec<u8>,
 }
 
@@ -2006,12 +2078,26 @@ impl TryFrom<FromVTableShape<'_, '_>> for VTableShape {
 // VFTable Type (LF_VFTABLE) - TPI Stream
 // ============================================================================
 
+/// Represents a virtual function table (vftable) with its location and inheritance path.
+///
+/// VFTables are used in C++ classes with virtual functions. This type describes
+/// where the vtable is located in memory and which class hierarchy it belongs to.
+///
+/// # Fields
+/// - `root`: The root class that owns this vtable
+/// - `path`: Type index describing the inheritance path to this vtable
+/// - `offset`: Offset from the class base where this vtable pointer is located
+/// - `segment`: Section/segment index where the vtable data resides
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct VFTableType {
+    /// The root class that owns this virtual function table
     pub root: TypeRef,
+    /// Type describing the inheritance path to this vtable
     pub path: TypeRef,
+    /// Offset in bytes from the class base address
     pub offset: u32,
+    /// Section/segment index containing the vtable
     pub segment: u16,
 }
 
