@@ -223,28 +223,19 @@ impl TryFrom<FromClass<'_, '_>> for Class {
         let _vtable_shape = class.fixed.vtable_shape.get();
         let size = u64::try_from(class.length).unwrap_or(0);
 
-        let fields: Vec<TypeRef> = if fields.0 != 0 {
-            // Extract fields from FieldList type
-            // Note: FieldList.0 is Vec<TypeRef> and we clone it here.
-            // We could optimize this by using Rc<Vec<TypeRef>> but that would require
-            // larger refactoring throughout the codebase. Current approach is simpler.
-            if let Type::FieldList(fields_list) =
-                &*crate::handle_type(fields, output_pdb, type_stream)?
-                    .as_ref()
-                    .borrow()
-            {
-                fields_list.0.clone()
-            } else {
-                panic!("got an unexpected type when FieldList was expected")
-            }
-        } else {
-            vec![]
-        };
-
         let derived_from = if derived_from.0 != 0 {
             Some(crate::handle_type(derived_from, output_pdb, type_stream)?)
         } else {
             None
+        };
+
+        let fields: Vec<TypeRef> = if fields.0 != 0 {
+            // Parse the field list directly using TypeIndex
+            // This allows iter_fields() to properly handle continuation chains
+            let field_list: FieldList = (fields, type_stream, output_pdb).try_into()?;
+            field_list.0
+        } else {
+            vec![]
         };
 
         let unique_name = class.unique_name.map(|s| s.to_string());
@@ -431,17 +422,13 @@ impl TryFrom<FromUnion<'_, '_>> for Union {
         let properties = union.fixed.property.get();
         let fields = union.fixed.fields.get();
 
-        let fields_type = crate::handle_type(fields, output_pdb, type_stream)?;
-
-        let fields = {
-            let borrowed_fields = fields_type.as_ref().borrow();
-            match &*borrowed_fields {
-                Type::FieldList(fields_list) => fields_list.0.clone(),
-                _ => {
-                    drop(borrowed_fields);
-                    vec![fields_type]
-                }
-            }
+        let fields = if fields.0 != 0 {
+            // Parse the field list directly using TypeIndex
+            // This allows iter_fields() to properly handle continuation chains
+            let field_list: FieldList = (fields, type_stream, output_pdb).try_into()?;
+            field_list.0
+        } else {
+            vec![]
         };
 
         let union_result = Union {
@@ -522,28 +509,28 @@ impl TryFrom<FromEnumeration<'_, '_>> for Enumeration {
 
         let underlying_type = crate::handle_type(underlying_type, output_pdb, type_stream)?;
 
-        let fields_type = crate::handle_type(fields, output_pdb, type_stream)?;
-
-        let fields = {
-            let borrowed_fields = fields_type.as_ref().borrow();
-            match &*borrowed_fields {
-                Type::FieldList(fields_list) => fields_list.0.clone(),
-                _other => {
-                    vec![]
-                }
-            }
+        // Parse the field list directly using TypeIndex, just like Class and Union do
+        // This allows iter_fields() to properly handle continuation chains
+        let fields: Vec<EnumVariant> = if fields.0 != 0 {
+            let field_list: FieldList = (fields, type_stream, output_pdb).try_into()?;
+            field_list
+                .0
+                .iter()
+                .filter_map(|field| {
+                    if let Type::EnumVariant(var) = &*field.borrow() {
+                        Some(var.clone())
+                    } else {
+                        warn!(
+                            "Unexpected non-EnumVariant field in enum field list: {:?}",
+                            field
+                        );
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
         };
-
-        let fields = fields
-            .iter()
-            .map(|field| {
-                if let Type::EnumVariant(var) = &*field.borrow() {
-                    var.clone()
-                } else {
-                    panic!("field {:?} is not an enumvariant", field)
-                }
-            })
-            .collect::<Vec<_>>();
 
         Ok(Enumeration {
             name: e.name.to_string(),
@@ -1080,7 +1067,7 @@ impl TryFrom<FromArray<'_, '_>> for Array {
 pub struct FieldList(pub Vec<TypeRef>);
 
 type FromFieldList<'a, 'b> = (
-    &'b ms_pdb::codeview::types::FieldList<'a>,
+    ms_pdb::codeview::types::TypeIndex,
     &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
     &'b mut crate::symbol_types::ParsedPdb,
 );
@@ -1088,98 +1075,141 @@ type FromFieldList<'a, 'b> = (
 impl TryFrom<FromFieldList<'_, '_>> for FieldList {
     type Error = Error;
     fn try_from(data: FromFieldList<'_, '_>) -> Result<Self, Self::Error> {
-        let (field_list, type_stream, output_pdb) = data;
+        let (field_list_index, type_stream, output_pdb) = data;
 
         let mut fields = Vec::new();
 
-        // Iterate through all fields in the field list
-        for field in field_list.iter() {
+        // Use iter_fields() which correctly handles field list continuation chains
+        // (fields can be split across multiple LF_FIELDLIST records)
+        for field in type_stream.iter_fields(field_list_index) {
             match field {
                 ms_pdb::codeview::types::fields::Field::Member(member) => {
-                    let member_type = crate::handle_type(member.ty, output_pdb, type_stream)?;
-                    let offset = u64::try_from(member.offset).unwrap_or(0) as usize;
-                    // Create a Type::Member with the name
-                    let member_with_name = Type::Member(Member {
-                        name: member.name.to_string(),
-                        underlying_type: member_type,
-                        offset,
-                    });
-                    fields.push(Rc::new(RefCell::new(member_with_name)));
+                    match crate::handle_type(member.ty, output_pdb, type_stream) {
+                        Ok(member_type) => {
+                            let offset = u64::try_from(member.offset).unwrap_or(0) as usize;
+                            // Create a Type::Member with the name
+                            let member_with_name = Type::Member(Member {
+                                name: member.name.to_string(),
+                                underlying_type: member_type,
+                                offset,
+                            });
+                            fields.push(Rc::new(RefCell::new(member_with_name)));
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse member field '{}': {}", member.name, e);
+                            // Continue parsing other fields instead of failing entire struct
+                        }
+                    }
                 }
                 ms_pdb::codeview::types::fields::Field::StaticMember(static_member) => {
-                    let member_type =
-                        crate::handle_type(static_member.ty, output_pdb, type_stream)?;
-                    // Create a Type::StaticMember with the name
-                    let static_member_with_name = Type::StaticMember(StaticMember {
-                        name: static_member.name.to_string(),
-                        field_type: member_type,
-                    });
-                    fields.push(Rc::new(RefCell::new(static_member_with_name)));
+                    match crate::handle_type(static_member.ty, output_pdb, type_stream) {
+                        Ok(member_type) => {
+                            // Create a Type::StaticMember with the name
+                            let static_member_with_name = Type::StaticMember(StaticMember {
+                                name: static_member.name.to_string(),
+                                field_type: member_type,
+                            });
+                            fields.push(Rc::new(RefCell::new(static_member_with_name)));
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to parse static member '{}': {}",
+                                static_member.name, e
+                            );
+                        }
+                    }
                 }
                 ms_pdb::codeview::types::fields::Field::BaseClass(base_class) => {
-                    let base_type = crate::handle_type(base_class.ty, output_pdb, type_stream)?;
-                    let offset = u64::try_from(base_class.offset).unwrap_or(0) as usize;
+                    match crate::handle_type(base_class.ty, output_pdb, type_stream) {
+                        Ok(base_type) => {
+                            let offset = u64::try_from(base_class.offset).unwrap_or(0) as usize;
 
-                    // Determine ClassKind from the base class type itself
-                    let kind = {
-                        let borrowed = base_type.as_ref().borrow();
-                        match &*borrowed {
-                            Type::Class(c) => c.kind,
-                            _ => ClassKind::Struct, // Default if not a class type
+                            // Determine ClassKind from the base class type itself
+                            let kind = {
+                                let borrowed = base_type.as_ref().borrow();
+                                match &*borrowed {
+                                    Type::Class(c) => c.kind,
+                                    _ => ClassKind::Struct, // Default if not a class type
+                                }
+                            };
+
+                            // Create a Type::BaseClass
+                            let base_class_type = Type::BaseClass(BaseClass {
+                                kind,
+                                base_class: base_type,
+                                offset,
+                            });
+                            fields.push(Rc::new(RefCell::new(base_class_type)));
                         }
-                    };
-
-                    // Create a Type::BaseClass
-                    let base_class_type = Type::BaseClass(BaseClass {
-                        kind,
-                        base_class: base_type,
-                        offset,
-                    });
-                    fields.push(Rc::new(RefCell::new(base_class_type)));
+                        Err(e) => {
+                            warn!("Failed to parse base class: {}", e);
+                        }
+                    }
                 }
                 ms_pdb::codeview::types::fields::Field::DirectVirtualBaseClass(vbase) => {
-                    let base_type =
-                        crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream)?;
-                    let base_pointer =
-                        crate::handle_type(vbase.fixed.vbtype.get(), output_pdb, type_stream)?;
-                    let base_pointer_offset = u64::try_from(vbase.vbpoff).unwrap_or(0) as usize;
-                    let virtual_base_offset = u64::try_from(vbase.vboff).unwrap_or(0) as usize;
-                    // Create a Type::VirtualBaseClass
-                    let vbase_type = Type::VirtualBaseClass(VirtualBaseClass {
-                        direct: true,
-                        base_class: base_type,
-                        base_pointer,
-                        base_pointer_offset,
-                        virtual_base_offset,
-                    });
-                    fields.push(Rc::new(RefCell::new(vbase_type)));
+                    match (
+                        crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream),
+                        crate::handle_type(vbase.fixed.vbtype.get(), output_pdb, type_stream),
+                    ) {
+                        (Ok(base_type), Ok(base_pointer)) => {
+                            let base_pointer_offset =
+                                u64::try_from(vbase.vbpoff).unwrap_or(0) as usize;
+                            let virtual_base_offset =
+                                u64::try_from(vbase.vboff).unwrap_or(0) as usize;
+                            // Create a Type::VirtualBaseClass
+                            let vbase_type = Type::VirtualBaseClass(VirtualBaseClass {
+                                direct: true,
+                                base_class: base_type,
+                                base_pointer,
+                                base_pointer_offset,
+                                virtual_base_offset,
+                            });
+                            fields.push(Rc::new(RefCell::new(vbase_type)));
+                        }
+                        _ => {
+                            warn!("Failed to parse direct virtual base class");
+                        }
+                    }
                 }
                 ms_pdb::codeview::types::fields::Field::IndirectVirtualBaseClass(vbase) => {
-                    let base_type =
-                        crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream)?;
-                    let base_pointer =
-                        crate::handle_type(vbase.fixed.vbtype.get(), output_pdb, type_stream)?;
-                    let base_pointer_offset = u64::try_from(vbase.vbpoff).unwrap_or(0) as usize;
-                    let virtual_base_offset = u64::try_from(vbase.vboff).unwrap_or(0) as usize;
-                    // Create a Type::VirtualBaseClass
-                    let vbase_type = Type::VirtualBaseClass(VirtualBaseClass {
-                        direct: false,
-                        base_class: base_type,
-                        base_pointer,
-                        base_pointer_offset,
-                        virtual_base_offset,
-                    });
-                    fields.push(Rc::new(RefCell::new(vbase_type)));
+                    match (
+                        crate::handle_type(vbase.fixed.btype.get(), output_pdb, type_stream),
+                        crate::handle_type(vbase.fixed.vbtype.get(), output_pdb, type_stream),
+                    ) {
+                        (Ok(base_type), Ok(base_pointer)) => {
+                            let base_pointer_offset =
+                                u64::try_from(vbase.vbpoff).unwrap_or(0) as usize;
+                            let virtual_base_offset =
+                                u64::try_from(vbase.vboff).unwrap_or(0) as usize;
+                            // Create a Type::VirtualBaseClass
+                            let vbase_type = Type::VirtualBaseClass(VirtualBaseClass {
+                                direct: false,
+                                base_class: base_type,
+                                base_pointer,
+                                base_pointer_offset,
+                                virtual_base_offset,
+                            });
+                            fields.push(Rc::new(RefCell::new(vbase_type)));
+                        }
+                        _ => {
+                            warn!("Failed to parse indirect virtual base class");
+                        }
+                    }
                 }
                 ms_pdb::codeview::types::fields::Field::NestedType(nested) => {
-                    let nested_type =
-                        crate::handle_type(nested.nested_ty, output_pdb, type_stream)?;
-                    // Create a Type::Nested
-                    let nested_with_name = Type::Nested(Nested {
-                        name: nested.name.to_string(),
-                        nested_type,
-                    });
-                    fields.push(Rc::new(RefCell::new(nested_with_name)));
+                    match crate::handle_type(nested.nested_ty, output_pdb, type_stream) {
+                        Ok(nested_type) => {
+                            // Create a Type::Nested
+                            let nested_with_name = Type::Nested(Nested {
+                                name: nested.name.to_string(),
+                                nested_type,
+                            });
+                            fields.push(Rc::new(RefCell::new(nested_with_name)));
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse nested type '{}': {}", nested.name, e);
+                        }
+                    }
                 }
                 ms_pdb::codeview::types::fields::Field::OneMethod(_method) => {
                     // Methods don't have a separate type, but we could create a placeholder
@@ -1188,14 +1218,29 @@ impl TryFrom<FromFieldList<'_, '_>> for FieldList {
                 ms_pdb::codeview::types::fields::Field::Method(_method) => {
                     // Skip method lists for now
                 }
-                ms_pdb::codeview::types::fields::Field::Enumerate(_enumerate) => {
-                    // Enumerates are values, not types, so skip them
+                ms_pdb::codeview::types::fields::Field::Enumerate(enumerate) => {
+                    // Enumerate fields are enum variants - convert them to EnumVariant type
+                    match EnumVariant::try_from(&enumerate) {
+                        Ok(variant) => {
+                            let enum_variant_type = Type::EnumVariant(variant);
+                            fields.push(Rc::new(RefCell::new(enum_variant_type)));
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse enum variant '{}': {}", enumerate.name, e);
+                        }
+                    }
                 }
                 ms_pdb::codeview::types::fields::Field::VFuncTable(vtable_type) => {
-                    let vtable = crate::handle_type(vtable_type, output_pdb, type_stream)?;
-                    // VFuncTables are stored as VTable type (tuple struct)
-                    let vtable_type = Type::VTable(VTable(vtable));
-                    fields.push(Rc::new(RefCell::new(vtable_type)));
+                    match crate::handle_type(vtable_type, output_pdb, type_stream) {
+                        Ok(vtable) => {
+                            // VFuncTables are stored as VTable type (tuple struct)
+                            let vtable_type = Type::VTable(VTable(vtable));
+                            fields.push(Rc::new(RefCell::new(vtable_type)));
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse VFuncTable: {}", e);
+                        }
+                    }
                 }
                 _ => {
                     // Skip unknown field types

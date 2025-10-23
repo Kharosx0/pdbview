@@ -718,9 +718,12 @@ pub(crate) fn handle_type_data(
             let typ = (data, type_stream, output_pdb).try_into()?;
             Type::Modifier(typ)
         }
-        TypeData::FieldList(data) => {
-            let typ = (data, type_stream, output_pdb).try_into()?;
-            Type::FieldList(typ)
+        TypeData::FieldList(_data) => {
+            // FieldList is now parsed directly using TypeIndex in Class/Union parsing
+            // to properly handle field list continuation chains via iter_fields()
+            return Err(Error::UnhandledType(
+                "FieldList should not be parsed through handle_type_data - use iter_fields() instead".to_string(),
+            ));
         }
         TypeData::ArgList(data) => {
             let typ = (data, type_stream, output_pdb).try_into()?;
@@ -837,9 +840,12 @@ pub(crate) fn handle_ipi_type_data(
             let typ = (data, ipi_stream, output_pdb).try_into()?;
             Type::Modifier(typ)
         }
-        TypeData::FieldList(data) => {
-            let typ = (data, ipi_stream, output_pdb).try_into()?;
-            Type::FieldList(typ)
+        TypeData::FieldList(_data) => {
+            // FieldList should be parsed via iter_fields() in Class/Union parsing
+            // to properly handle field list continuation chains
+            return Err(Error::UnhandledType(
+                "FieldList should not be parsed through handle_ipi_type_data - use iter_fields() instead".to_string(),
+            ));
         }
         TypeData::ArgList(data) => {
             let typ = (data, ipi_stream, output_pdb).try_into()?;
