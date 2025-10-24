@@ -445,7 +445,7 @@ impl TryFrom<FromUnion<'_, '_>> for Union {
 }
 
 type FromBitfield<'a, 'b> = (
-    &'b ms_pdb::codeview::types::TypeIndex,
+    &'a ms_pdb::codeview::types::Bitfield,
     &'b ms_pdb::tpi::TypeStream<Vec<u8>>,
     &'b mut crate::symbol_types::ParsedPdb,
 );
@@ -459,18 +459,15 @@ pub struct Bitfield {
 impl TryFrom<FromBitfield<'_, '_>> for Bitfield {
     type Error = Error;
     fn try_from(data: FromBitfield<'_, '_>) -> Result<Self, Self::Error> {
-        let (type_index, type_stream, output_pdb) = data;
+        let (bitfield_data, type_stream, output_pdb) = data;
 
-        // Note: ms-pdb doesn't have explicit Bitfield support in TypeData enum yet
-        // LF_BITFIELD records map to Unknown. For now, we'll create a minimal implementation
-        // that just wraps the type index
-        let underlying_type = crate::handle_type(*type_index, output_pdb, type_stream)?;
+        let underlying_type =
+            crate::handle_type(bitfield_data.underlying_type.get(), output_pdb, type_stream)?;
 
-        warn!("Bitfield type encountered but ms-pdb doesn't support LF_BITFIELD parsing - returning placeholder with zero len/position");
         Ok(Bitfield {
             underlying_type,
-            len: 0,      // Would need LF_BITFIELD record parsing in ms-pdb
-            position: 0, // Would need LF_BITFIELD record parsing in ms-pdb
+            len: bitfield_data.length as usize,
+            position: bitfield_data.position as usize,
         })
     }
 }
@@ -757,15 +754,29 @@ pub struct PointerAttributes {
 // Note: PointerAttributes conversion is handled in the Pointer TryFrom implementation
 // by extracting fields from PointerFlags in ms-pdb
 
+/// A primitive type from the PDB type system.
+///
+/// Primitive types are encoded directly in TypeIndex values (rather than requiring
+/// separate type records). The TypeIndex encodes both the base type kind and optional
+/// indirection (pointer) information.
+///
+/// # Encoding
+///
+/// - Bits 0-7: Type kind (see [`PrimitiveKind`])
+/// - Bits 8-11: Indirection mode (see [`Indirection`])
+///
+/// Primitive types are identified by TypeIndex values below the type record range
+/// (typically < 0x1000).
+///
+/// # References
+///
+/// - Microsoft PDB format: `cvinfo.h` (CV_typ_e enumeration)
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Primitive {
     pub kind: PrimitiveKind,
     pub indirection: Option<Indirection>,
 }
-
-// Note: Primitive conversion from TypeIndex is handled in handle_type_data
-// by checking if TypeIndex is < 0x1000 (primitive type range)
 
 impl Typed for Primitive {
     fn type_size(&self, _pdb: &ParsedPdb) -> usize {
@@ -783,20 +794,33 @@ impl Primitive {
     }
 }
 
+/// Pointer indirection modes for primitive types.
+///
+/// These modes specify the pointer type when a primitive TypeIndex includes indirection
+/// information (bits 8-11 of the TypeIndex value). Different modes represent different
+/// memory models and pointer sizes used in various architectures.
+///
+/// # References
+///
+/// - CodeView specification: MODE_* constants in `cvinfo.h`
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub enum Indirection {
+    /// 16-bit near pointer
     Near16,
+    /// 16-bit far pointer
     Far16,
+    /// 16-bit huge pointer
     Huge16,
+    /// 32-bit near pointer
     Near32,
+    /// 32-bit far pointer
     Far32,
+    /// 64-bit pointer
     Near64,
+    /// 128-bit pointer
     Near128,
 }
-
-// Note: Indirection is derived from pointer attributes in ms-pdb
-// Conversion happens in the Pointer TryFrom implementation
 
 impl Typed for Indirection {
     fn type_size(&self, _pdb: &ParsedPdb) -> usize {
@@ -815,6 +839,21 @@ impl Indirection {
     }
 }
 
+/// Primitive type kinds as defined by the Microsoft PDB format.
+///
+/// These types correspond to the CV_typ_e enumeration in the CodeView debug format.
+/// In PDB files, primitive types use special TypeIndex values where the type information
+/// is encoded directly in the index rather than requiring a separate type record.
+///
+/// # Platform Dependencies
+///
+/// Note that some types like `Long`, `ULong`, `Quad`, and `UQuad` have platform-dependent
+/// sizes, while explicitly-sized types like `I32`, `U32`, `I64`, `U64` have fixed sizes.
+///
+/// # References
+///
+/// - Microsoft Debug Interface Access SDK: `cvinfo.h`
+/// - ms-pdb type constants: [`ms_pdb::codeview::types::primitive`](https://github.com/microsoft/pdb-rs/blob/main/crates/codeview/src/types/primitive.rs)
 #[derive(Debug, Copy, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub enum PrimitiveKind {
@@ -861,10 +900,6 @@ pub enum PrimitiveKind {
     Bool64,
     HRESULT,
 }
-
-// Note: PrimitiveKind is derived from TypeIndex in ms-pdb
-// Primitive types are represented as special TypeIndex values
-// Conversion happens in the Primitive TryFrom implementation
 
 impl Typed for PrimitiveKind {
     fn type_size(&self, _pdb: &ParsedPdb) -> usize {

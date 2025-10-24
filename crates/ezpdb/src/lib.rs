@@ -1,3 +1,23 @@
+//! PDB file parser built on top of the [`ms-pdb`] crate.
+//!
+//! This library provides high-level access to Program Database (PDB) files, which contain
+//! debugging information for Windows executables. It extracts types, symbols, procedures,
+//! and other debug information into structured Rust types.
+//!
+//! # PDB Format References
+//!
+//! - Microsoft Debug Interface Access SDK: Official documentation for PDB structures
+//! - [`ms-pdb`](https://github.com/microsoft/pdb-rs): Low-level PDB parsing library
+//! - CodeView specification: Type and symbol format definitions (`cvinfo.h`)
+//!
+//! # Type System
+//!
+//! PDB types are organized into two streams:
+//! - **TPI** (Type Program Information): Structs, unions, enums, and other user-defined types
+//! - **IPI** (ID Program Information): Function signatures, string IDs, and build metadata
+//!
+//! See [`type_info`] for type definitions and [`type_info::Primitive`] for primitive type handling.
+
 use crate::error::Error;
 use crate::symbol_types::*;
 use log::{debug, trace, warn};
@@ -184,10 +204,27 @@ fn section_offset_to_rva(pdb: &Pdb, guid: uuid::Uuid, section: u16, offset: u32)
         .map(|rva| rva as usize)
 }
 
-/// Decodes a primitive TypeIndex into a Primitive type
-/// TypeIndex encodes primitive types in the lower bits:
-/// - Bits 0-7: Type kind (T_VOID, T_CHAR, T_INT4, etc.)
-/// - Bits 8-11: Indirection mode (near16, far16, near32, ptr64, etc.)
+/// Decodes a primitive TypeIndex into a [`Primitive`](crate::type_info::Primitive) type.
+///
+/// Primitive types in PDB files use special TypeIndex values where the type information
+/// is encoded directly in the index value rather than requiring a type record lookup.
+///
+/// # Encoding Format
+///
+/// - Bits 0-7: Type kind (e.g., `T_VOID`, `T_CHAR`, `T_INT4`)
+/// - Bits 8-11: Indirection mode (e.g., near16, far16, near32, ptr64)
+///
+/// # References
+///
+/// - Microsoft PDB format: See `cvinfo.h` from the Debug Interface Access SDK
+/// - Type constant definitions: [`ms_pdb::codeview::types::primitive`](https://github.com/microsoft/pdb-rs/blob/main/crates/codeview/src/types/primitive.rs)
+/// - CodeView specification: Part of the Microsoft Symbol and Type Information specification
+///
+/// # Correctness
+///
+/// These mappings must exactly match the constants defined in `ms-pdb/codeview/src/types/primitive.rs`.
+/// Any deviation can cause type size mismatches and data corruption. See `PRIMITIVE_TYPE_BUG_ANALYSIS.md`
+/// for historical context on a critical bug that was fixed in this area.
 fn decode_primitive_type(
     idx: ms_pdb::codeview::types::TypeIndex,
 ) -> Result<crate::type_info::Primitive, Error> {
@@ -197,71 +234,68 @@ fn decode_primitive_type(
     let kind_value = type_value & 0xFF;
     let mode_value = (type_value >> 8) & 0xF;
 
-    // Decode primitive kind from CV_typ_e enum
-    // See cvinfo.h from Microsoft's debug interface access SDK
+    // Decode primitive kind from CV_typ_e enum.
+    // Reference: ms-pdb/codeview/src/types/primitive.rs (PRIMITIVES table)
     let kind = match kind_value {
-        0x0000 => PrimitiveKind::NoType,
-        0x0003 => PrimitiveKind::Void,
-        0x0008 => PrimitiveKind::HRESULT,
+        // Special types
+        0x0000 => PrimitiveKind::NoType,  // T_NOTYPE
+        0x0003 => PrimitiveKind::Void,    // T_VOID
+        0x0007 => PrimitiveKind::Void,    // T_NOTTRANS (type not translated)
+        0x0008 => PrimitiveKind::HRESULT, // T_HRESULT
 
-        // Character types
-        0x0010 => PrimitiveKind::Char,
-        0x0020 => PrimitiveKind::Short,
-        0x0021 => PrimitiveKind::UShort,
-        0x0022 => PrimitiveKind::I16,
-        0x0023 => PrimitiveKind::U16,
+        // Basic integer types (T_CHAR through T_UOCT)
+        0x0010 => PrimitiveKind::Char,   // T_CHAR
+        0x0011 => PrimitiveKind::Short,  // T_SHORT
+        0x0012 => PrimitiveKind::Long,   // T_LONG
+        0x0013 => PrimitiveKind::Quad,   // T_QUAD (long long)
+        0x0014 => PrimitiveKind::Octa,   // T_OCT (__int128)
+        0x0020 => PrimitiveKind::UChar,  // T_UCHAR
+        0x0021 => PrimitiveKind::UShort, // T_USHORT
+        0x0022 => PrimitiveKind::ULong,  // T_ULONG
+        0x0023 => PrimitiveKind::UQuad,  // T_UQUAD (unsigned long long)
+        0x0024 => PrimitiveKind::UOcta,  // T_UOCT (unsigned __int128)
 
-        // Boolean
-        0x0030 => PrimitiveKind::Bool8,
-        0x0031 => PrimitiveKind::Bool16,
-        0x0033 => PrimitiveKind::Bool32,
-        0x0034 => PrimitiveKind::Bool64,
+        // Boolean types (T_BOOL8 through T_BOOL64)
+        0x0030 => PrimitiveKind::Bool8,  // T_BOOL8
+        0x0031 => PrimitiveKind::Bool16, // T_BOOL16
+        0x0032 => PrimitiveKind::Bool32, // T_BOOL32
+        0x0033 => PrimitiveKind::Bool64, // T_BOOL64
 
-        // Floating point
-        0x0040 => PrimitiveKind::F32,
-        0x0041 => PrimitiveKind::F32PP,
-        0x0042 => PrimitiveKind::F64,
-        0x0043 => PrimitiveKind::F128,
-        0x0044 => PrimitiveKind::F48,
-        0x0045 => PrimitiveKind::F80,
-        0x0046 => PrimitiveKind::F16,
+        // Floating point types (T_REAL32 through T_REAL16)
+        0x0040 => PrimitiveKind::F32,   // T_REAL32 (float)
+        0x0041 => PrimitiveKind::F64,   // T_REAL64 (double)
+        0x0042 => PrimitiveKind::F80,   // T_REAL80 (long double)
+        0x0043 => PrimitiveKind::F128,  // T_REAL128
+        0x0044 => PrimitiveKind::F48,   // T_REAL48
+        0x0045 => PrimitiveKind::F32PP, // T_REAL32PP
+        0x0046 => PrimitiveKind::F16,   // T_REAL16
 
-        // Complex
-        0x0050 => PrimitiveKind::Complex32,
-        0x0051 => PrimitiveKind::Complex64,
-        0x0052 => PrimitiveKind::Complex128,
-        0x0053 => PrimitiveKind::Complex80,
+        // Complex types (T_CPLX32 through T_CPLX128)
+        0x0050 => PrimitiveKind::Complex32,  // T_CPLX32
+        0x0051 => PrimitiveKind::Complex64,  // T_CPLX64
+        0x0052 => PrimitiveKind::Complex80,  // T_CPLX80
+        0x0053 => PrimitiveKind::Complex128, // T_CPLX128
 
-        // 8-bit types
-        0x0068 => PrimitiveKind::I8,
-        0x0069 => PrimitiveKind::U8,
+        // Explicitly sized integer types (T_UINT1 through T_UINT8)
+        // These map to __int8, __int16, __int32, __int64 and unsigned variants
+        0x0066 => PrimitiveKind::U8,    // T_UINT1 (unsigned __int8)
+        0x0068 => PrimitiveKind::I8,    // T_INT1 (__int8)
+        0x0070 => PrimitiveKind::RChar, // T_RCHAR (really a character)
+        0x0071 => PrimitiveKind::WChar, // T_WCHAR
+        0x0072 => PrimitiveKind::I16,   // T_INT2 (__int16)
+        0x0073 => PrimitiveKind::U16,   // T_UINT2 (unsigned __int16)
+        0x0074 => PrimitiveKind::I32,   // T_INT4 (__int32)
+        0x0075 => PrimitiveKind::U32,   // T_UINT4 (unsigned __int32)
+        0x0076 => PrimitiveKind::I64,   // T_INT8 (__int64)
+        0x0077 => PrimitiveKind::U64,   // T_UINT8 (unsigned __int64)
 
-        // Wide character types
-        0x0070 => PrimitiveKind::RChar,
-        0x0071 => PrimitiveKind::WChar,
+        // Unicode character types (T_CHAR16, T_CHAR32)
+        0x007a => PrimitiveKind::RChar16, // T_CHAR16
+        0x007b => PrimitiveKind::RChar32, // T_CHAR32
 
-        // 32-bit integers
-        0x0072 => PrimitiveKind::I32,
-        0x0073 => PrimitiveKind::U32,
-
-        // Long types (platform-dependent)
-        0x0074 => PrimitiveKind::Long,
-        0x0075 => PrimitiveKind::ULong,
-
-        // 64-bit integers
-        0x0076 => PrimitiveKind::Quad,
-        0x0077 => PrimitiveKind::UQuad,
-
-        // Unicode character types
-        0x007a => PrimitiveKind::RChar16,
-        0x007b => PrimitiveKind::RChar32,
-
-        // Explicit sized types
-        0x0013 => PrimitiveKind::I64,
-        0x0014 => PrimitiveKind::Octa,
-        0x0015 => PrimitiveKind::UOcta,
-        0x0017 => PrimitiveKind::I128,
-        0x0018 => PrimitiveKind::U128,
+        // Extended integer types (128-bit)
+        0x0017 => PrimitiveKind::I128, // __int128 (also covered by 0x0014 for signed)
+        0x0018 => PrimitiveKind::U128, // unsigned __int128 (also covered by 0x0024)
 
         _ => {
             warn!(
@@ -272,7 +306,8 @@ fn decode_primitive_type(
         }
     };
 
-    // Decode indirection mode
+    // Decode indirection mode (pointer types).
+    // Reference: cvinfo.h MODE_* constants
     let indirection = match mode_value {
         0x0 => None, // Direct
         0x1 => Some(Indirection::Near16),
@@ -718,6 +753,10 @@ pub(crate) fn handle_type_data(
             let typ = (data, type_stream, output_pdb).try_into()?;
             Type::Modifier(typ)
         }
+        TypeData::Bitfield(data) => {
+            let typ = (*data, type_stream, output_pdb).try_into()?;
+            Type::Bitfield(typ)
+        }
         TypeData::FieldList(_data) => {
             // FieldList is now parsed directly using TypeIndex in Class/Union parsing
             // to properly handle field list continuation chains via iter_fields()
@@ -783,6 +822,11 @@ pub(crate) fn handle_ipi_type_data(
     use crate::type_info::Type;
 
     let result_typ = match typ {
+        TypeData::Bitfield(data) => {
+            // Bitfield can appear in IPI stream as well
+            let typ = (*data, ipi_stream, output_pdb).try_into()?;
+            Type::Bitfield(typ)
+        }
         // Pure IPI types
         TypeData::FuncId(data) => {
             let typ = (data, ipi_stream, output_pdb).try_into()?;
