@@ -3,9 +3,9 @@ use clap::Parser;
 use log::{error, info};
 use std::path::PathBuf;
 
-mod old_pdb;
-mod new_pdb;
-mod compare;
+pub mod compare;
+pub mod new_pdb;
+pub mod old_pdb;
 
 #[derive(Parser, Debug)]
 #[command(name = "pdb-compare")]
@@ -97,7 +97,10 @@ fn main() -> Result<()> {
             Err(e) => {
                 error!("Failed to parse with old pdb crate: {}", e);
                 all_output.push_str(&format!("\n=== {} ===\n", pdb_path.display()));
-                all_output.push_str(&format!("ERROR: Failed to parse with old pdb crate: {}\n", e));
+                all_output.push_str(&format!(
+                    "ERROR: Failed to parse with old pdb crate: {}\n",
+                    e
+                ));
                 continue;
             }
         };
@@ -110,7 +113,10 @@ fn main() -> Result<()> {
             Err(e) => {
                 error!("Failed to parse with new ezpdb crate: {}", e);
                 all_output.push_str(&format!("\n=== {} ===\n", pdb_path.display()));
-                all_output.push_str(&format!("ERROR: Failed to parse with new ezpdb crate: {}\n", e));
+                all_output.push_str(&format!(
+                    "ERROR: Failed to parse with new ezpdb crate: {}\n",
+                    e
+                ));
                 continue;
             }
         };
@@ -128,11 +134,26 @@ fn main() -> Result<()> {
         output.push_str(&"=".repeat(80));
         output.push_str("\n\n");
         output.push_str(&format!("Categories tested: {}\n", categories.join(", ")));
-        output.push_str(&format!("\nTotal differences: {}\n", comparison.summary.total_differences));
-        output.push_str(&format!("Header matches: {}\n", comparison.summary.header_matches));
-        output.push_str(&format!("Type count matches: {}\n", comparison.summary.type_count_matches));
-        output.push_str(&format!("Symbol count matches: {}\n", comparison.summary.symbol_count_matches));
-        output.push_str(&format!("Module count matches: {}\n", comparison.summary.module_count_matches));
+        output.push_str(&format!(
+            "\nTotal differences: {}\n",
+            comparison.summary.total_differences
+        ));
+        output.push_str(&format!(
+            "Header matches: {}\n",
+            comparison.summary.header_matches
+        ));
+        output.push_str(&format!(
+            "Type count matches: {}\n",
+            comparison.summary.type_count_matches
+        ));
+        output.push_str(&format!(
+            "Symbol count matches: {}\n",
+            comparison.summary.symbol_count_matches
+        ));
+        output.push_str(&format!(
+            "Module count matches: {}\n",
+            comparison.summary.module_count_matches
+        ));
 
         // Add detailed differences
         if !comparison.differences.is_empty() {
@@ -149,7 +170,9 @@ fn main() -> Result<()> {
                 output.push_str("\n");
             }
         } else {
-            output.push_str("\n✅ No differences found! Both implementations produce identical results.\n");
+            output.push_str(
+                "\n✅ No differences found! Both implementations produce identical results.\n",
+            );
         }
 
         all_output.push_str(&output);
@@ -159,8 +182,14 @@ fn main() -> Result<()> {
     let mut final_output = String::new();
     final_output.push_str("=== PDB Comparison Summary ===\n\n");
     final_output.push_str(&format!("Total PDB files tested: {}\n", total_files));
-    final_output.push_str(&format!("Files with differences: {}\n", files_with_differences));
-    final_output.push_str(&format!("Files matching perfectly: {}\n", total_files - files_with_differences));
+    final_output.push_str(&format!(
+        "Files with differences: {}\n",
+        files_with_differences
+    ));
+    final_output.push_str(&format!(
+        "Files matching perfectly: {}\n",
+        total_files - files_with_differences
+    ));
     final_output.push_str(&all_output);
 
     // Print to console
@@ -170,11 +199,17 @@ fn main() -> Result<()> {
     let text_output_path = PathBuf::from("pdb_compare_results.txt");
     info!("Writing detailed results to {}", text_output_path.display());
     std::fs::write(&text_output_path, &final_output)?;
-    println!("Detailed results written to: {}", text_output_path.display());
+    println!(
+        "Detailed results written to: {}",
+        text_output_path.display()
+    );
 
     // Output to JSON if requested
     if let Some(output_path) = args.output {
-        info!("Writing JSON comparison results to {}", output_path.display());
+        info!(
+            "Writing JSON comparison results to {}",
+            output_path.display()
+        );
         // For multiple files, we'd need to adjust the JSON structure, but for now just note it
         println!("Note: JSON output not fully implemented for multiple files yet");
     }
@@ -191,7 +226,7 @@ fn main() -> Result<()> {
 fn run_cache_test() -> Result<()> {
     // Use relative path to cache_test_pdbs directory
     let cache_dir = PathBuf::from("cache_test_pdbs");
-    
+
     // Scan the directory for all .pdb files
     let mut test_pdbs = Vec::new();
     if cache_dir.exists() && cache_dir.is_dir() {
@@ -203,22 +238,28 @@ fn run_cache_test() -> Result<()> {
             }
         }
     }
-    
+
     if test_pdbs.is_empty() {
         error!("No PDB files found in cache_test_pdbs directory!");
         error!("Please place test PDB files in the cache_test_pdbs directory");
         return Err(anyhow::anyhow!("No test PDB files found"));
     }
-    
+
     // Sort for consistent ordering
     test_pdbs.sort();
 
     info!("=== Cache Test Mode ===");
-    info!("Testing with {} PDB files from cache_test_pdbs/", test_pdbs.len());
-    
+    info!(
+        "Testing with {} PDB files from cache_test_pdbs/",
+        test_pdbs.len()
+    );
+
     let mut all_output = String::new();
     all_output.push_str("=== Cache Test Results ===\n\n");
-    all_output.push_str(&format!("Testing {} PDB files from cache_test_pdbs/\n", test_pdbs.len()));
+    all_output.push_str(&format!(
+        "Testing {} PDB files from cache_test_pdbs/\n",
+        test_pdbs.len()
+    ));
     all_output.push_str("This test compares old ezpdb (pdb crate) vs new ezpdb (ms-pdb)\n\n");
 
     let mut successful_parses = 0;
@@ -226,11 +267,21 @@ fn run_cache_test() -> Result<()> {
     let mut total_offset_mismatches = 0;
 
     for (idx, pdb_path) in test_pdbs.iter().enumerate() {
-        info!("\n[{}/{}] Processing: {}", idx + 1, test_pdbs.len(), pdb_path.display());
+        info!(
+            "\n[{}/{}] Processing: {}",
+            idx + 1,
+            test_pdbs.len(),
+            pdb_path.display()
+        );
         all_output.push_str("\n");
         all_output.push_str(&"=".repeat(80));
         all_output.push_str("\n");
-        all_output.push_str(&format!("[{}/{}] PDB: {}\n", idx + 1, test_pdbs.len(), pdb_path.display()));
+        all_output.push_str(&format!(
+            "[{}/{}] PDB: {}\n",
+            idx + 1,
+            test_pdbs.len(),
+            pdb_path.display()
+        ));
         all_output.push_str(&"=".repeat(80));
         all_output.push_str("\n");
 
@@ -274,30 +325,56 @@ fn run_cache_test() -> Result<()> {
 
         // Compare results
         let comparison = compare::compare_pdbs(&old_result, &new_result);
-        
+
         // Count offset mismatches specifically
-        let offset_mismatches = comparison.differences.iter()
-            .filter(|d| d.description.contains("offset mismatch") || d.description.contains("address mismatch"))
+        let offset_mismatches = comparison
+            .differences
+            .iter()
+            .filter(|d| {
+                d.description.contains("offset mismatch")
+                    || d.description.contains("address mismatch")
+            })
             .count();
-        
+
         total_offset_mismatches += offset_mismatches;
 
         all_output.push_str(&format!("\nComparison Results:\n"));
-        all_output.push_str(&format!("  Total differences: {}\n", comparison.summary.total_differences));
-        all_output.push_str(&format!("  Offset/Address mismatches: {}\n", offset_mismatches));
-        all_output.push_str(&format!("  Public symbols: {} (old) vs {} (new)\n", 
-            old_result.symbols.public_symbols.len(), new_result.symbols.public_symbols.len()));
-        all_output.push_str(&format!("  Procedures: {} (old) vs {} (new)\n", 
-            old_result.symbols.procedures.len(), new_result.symbols.procedures.len()));
-        all_output.push_str(&format!("  Data symbols: {} (old) vs {} (new)\n", 
-            old_result.symbols.data_symbols.len(), new_result.symbols.data_symbols.len()));
+        all_output.push_str(&format!(
+            "  Total differences: {}\n",
+            comparison.summary.total_differences
+        ));
+        all_output.push_str(&format!(
+            "  Offset/Address mismatches: {}\n",
+            offset_mismatches
+        ));
+        all_output.push_str(&format!(
+            "  Public symbols: {} (old) vs {} (new)\n",
+            old_result.symbols.public_symbols.len(),
+            new_result.symbols.public_symbols.len()
+        ));
+        all_output.push_str(&format!(
+            "  Procedures: {} (old) vs {} (new)\n",
+            old_result.symbols.procedures.len(),
+            new_result.symbols.procedures.len()
+        ));
+        all_output.push_str(&format!(
+            "  Data symbols: {} (old) vs {} (new)\n",
+            old_result.symbols.data_symbols.len(),
+            new_result.symbols.data_symbols.len()
+        ));
 
         if offset_mismatches == 0 {
             info!("✅ No offset mismatches - cache working correctly!");
             all_output.push_str("\n✅ CACHE TEST PASSED: No offset mismatches found!\n");
         } else {
-            error!("❌ Found {} offset mismatches - cache may have issues!", offset_mismatches);
-            all_output.push_str(&format!("\n❌ CACHE TEST FAILED: {} offset mismatches found!\n", offset_mismatches));
+            error!(
+                "❌ Found {} offset mismatches - cache may have issues!",
+                offset_mismatches
+            );
+            all_output.push_str(&format!(
+                "\n❌ CACHE TEST FAILED: {} offset mismatches found!\n",
+                offset_mismatches
+            ));
         }
 
         successful_parses += 1;
@@ -313,11 +390,17 @@ fn run_cache_test() -> Result<()> {
     all_output.push_str(&format!("Total PDB files tested: {}\n", test_pdbs.len()));
     all_output.push_str(&format!("Successfully parsed: {}\n", successful_parses));
     all_output.push_str(&format!("Failed to parse: {}\n", failed_parses));
-    all_output.push_str(&format!("Total offset mismatches across all files: {}\n", total_offset_mismatches));
+    all_output.push_str(&format!(
+        "Total offset mismatches across all files: {}\n",
+        total_offset_mismatches
+    ));
 
     if total_offset_mismatches == 0 && successful_parses == test_pdbs.len() {
-        all_output.push_str("\n🎉 CACHE TEST PASSED: All PDBs parsed successfully with no offset mismatches!\n");
-        all_output.push_str("The section header cache is working correctly across multiple PDB files.\n");
+        all_output.push_str(
+            "\n🎉 CACHE TEST PASSED: All PDBs parsed successfully with no offset mismatches!\n",
+        );
+        all_output
+            .push_str("The section header cache is working correctly across multiple PDB files.\n");
         info!("🎉 CACHE TEST PASSED!");
     } else {
         all_output.push_str("\n❌ CACHE TEST FAILED: Issues detected\n");
@@ -325,7 +408,10 @@ fn run_cache_test() -> Result<()> {
             all_output.push_str(&format!("  - {} file(s) failed to parse\n", failed_parses));
         }
         if total_offset_mismatches > 0 {
-            all_output.push_str(&format!("  - {} offset mismatch(es) found\n", total_offset_mismatches));
+            all_output.push_str(&format!(
+                "  - {} offset mismatch(es) found\n",
+                total_offset_mismatches
+            ));
         }
         error!("❌ CACHE TEST FAILED");
     }
@@ -355,14 +441,21 @@ fn run_api_test(pdb_files: &[PathBuf]) -> Result<()> {
     }
 
     info!("Testing API compatibility between old and new ezpdb...");
-    info!("Will compare parse_pdb() output for {} file(s)", pdb_files.len());
+    info!(
+        "Will compare parse_pdb() output for {} file(s)",
+        pdb_files.len()
+    );
 
     let mut all_passed = true;
     let mut results = String::new();
 
-    results.push_str("================================================================================\n");
+    results.push_str(
+        "================================================================================\n",
+    );
     results.push_str("=== ezpdb API Compatibility Test ===\n");
-    results.push_str("================================================================================\n\n");
+    results.push_str(
+        "================================================================================\n\n",
+    );
 
     for pdb_path in pdb_files {
         info!("Testing: {}", pdb_path.display());
@@ -411,14 +504,20 @@ fn run_api_test(pdb_files: &[PathBuf]) -> Result<()> {
 
         // Compare timestamp
         if old_pdb.timestamp != new_pdb.timestamp {
-            differences.push(format!("  timestamp: {} vs {}", old_pdb.timestamp, new_pdb.timestamp));
+            differences.push(format!(
+                "  timestamp: {} vs {}",
+                old_pdb.timestamp, new_pdb.timestamp
+            ));
         }
 
         // Compare machine_type
         let old_machine = format!("{:?}", old_pdb.machine_type);
         let new_machine = format!("{:?}", new_pdb.machine_type);
         if old_machine != new_machine {
-            differences.push(format!("  machine_type: {} vs {}", old_machine, new_machine));
+            differences.push(format!(
+                "  machine_type: {} vs {}",
+                old_machine, new_machine
+            ));
         }
 
         // Compare version (allow different representations of the same version)
@@ -442,7 +541,12 @@ fn run_api_test(pdb_files: &[PathBuf]) -> Result<()> {
         } else {
             // Check a sample of symbols for exact match
             let mut symbol_mismatches = 0;
-            for (old_sym, new_sym) in old_pdb.public_symbols.iter().zip(new_pdb.public_symbols.iter()).take(10) {
+            for (old_sym, new_sym) in old_pdb
+                .public_symbols
+                .iter()
+                .zip(new_pdb.public_symbols.iter())
+                .take(10)
+            {
                 if old_sym.name != new_sym.name || old_sym.offset != new_sym.offset {
                     symbol_mismatches += 1;
                 }
@@ -497,7 +601,7 @@ fn run_api_test(pdb_files: &[PathBuf]) -> Result<()> {
         // New API separates them: .types (TPI) and .ipi_types (IPI)
         let old_total_types = old_pdb.types.len();
         let new_total_types = new_pdb.types.len() + new_pdb.ipi_types.len();
-        
+
         if !new_pdb.ipi_types.is_empty() {
             results.push_str(&format!(
                 "ℹ️  Type separation: Old API had {} types (TPI+IPI mixed), New API has {} TPI + {} IPI = {} total\n",
@@ -507,13 +611,12 @@ fn run_api_test(pdb_files: &[PathBuf]) -> Result<()> {
                 new_total_types
             ));
         }
-        
+
         // It's OK if new finds more types (improvement), but not if it finds fewer
         if new_total_types < old_total_types {
             differences.push(format!(
                 "  REGRESSION: Total types decreased: {} (old) vs {} (new)",
-                old_total_types,
-                new_total_types
+                old_total_types, new_total_types
             ));
         } else if new_total_types > old_total_types {
             results.push_str(&format!(
@@ -536,25 +639,46 @@ fn run_api_test(pdb_files: &[PathBuf]) -> Result<()> {
         }
 
         results.push_str("\nSummary for this file:\n");
-        results.push_str(&format!("  Public symbols: {} (old) vs {} (new)\n",
-            old_pdb.public_symbols.len(), new_pdb.public_symbols.len()));
-        results.push_str(&format!("  Procedures: {} (old) vs {} (new)\n",
-            old_pdb.procedures.len(), new_pdb.procedures.len()));
-        results.push_str(&format!("  Global data: {} (old) vs {} (new)\n",
-            old_pdb.global_data.len(), new_pdb.global_data.len()));
-        results.push_str(&format!("  Types: {} (old) vs {} (new)\n",
-            old_pdb.types.len(), new_pdb.types.len()));
-        results.push_str(&format!("  IPI types: N/A (old) vs {} (new)\n",
-            new_pdb.ipi_types.len()));
-        results.push_str(&format!("  Debug modules: {} (old) vs {} (new)\n",
-            old_pdb.debug_modules.len(), new_pdb.debug_modules.len()));
+        results.push_str(&format!(
+            "  Public symbols: {} (old) vs {} (new)\n",
+            old_pdb.public_symbols.len(),
+            new_pdb.public_symbols.len()
+        ));
+        results.push_str(&format!(
+            "  Procedures: {} (old) vs {} (new)\n",
+            old_pdb.procedures.len(),
+            new_pdb.procedures.len()
+        ));
+        results.push_str(&format!(
+            "  Global data: {} (old) vs {} (new)\n",
+            old_pdb.global_data.len(),
+            new_pdb.global_data.len()
+        ));
+        results.push_str(&format!(
+            "  Types: {} (old) vs {} (new)\n",
+            old_pdb.types.len(),
+            new_pdb.types.len()
+        ));
+        results.push_str(&format!(
+            "  IPI types: N/A (old) vs {} (new)\n",
+            new_pdb.ipi_types.len()
+        ));
+        results.push_str(&format!(
+            "  Debug modules: {} (old) vs {} (new)\n",
+            old_pdb.debug_modules.len(),
+            new_pdb.debug_modules.len()
+        ));
         results.push_str("\n");
     }
 
     // Final summary
-    results.push_str("\n================================================================================\n");
+    results.push_str(
+        "\n================================================================================\n",
+    );
     results.push_str("=== API Compatibility Test Summary ===\n");
-    results.push_str("================================================================================\n");
+    results.push_str(
+        "================================================================================\n",
+    );
     results.push_str(&format!("Files tested: {}\n", pdb_files.len()));
 
     if all_passed {

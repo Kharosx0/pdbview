@@ -23,6 +23,32 @@ pub struct TypeInfo {
     pub kind: String,
     pub name: Option<String>,
     pub size: Option<u64>,
+    pub fields: Vec<FieldInfo>,
+    pub variants: Vec<VariantInfo>,
+    pub base_classes: Vec<BaseClassInfo>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FieldInfo {
+    pub name: String,
+    pub offset: Option<u64>,
+    pub type_index: Option<u32>,
+    pub type_kind: Option<String>,
+    pub bitfield_length: Option<usize>,
+    pub bitfield_position: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VariantInfo {
+    pub name: String,
+    pub value: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BaseClassInfo {
+    pub name: Option<String>,
+    pub offset: u64,
+    pub type_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -61,7 +87,8 @@ pub struct ModuleInfo {
 pub fn parse_pdb(path: &Path) -> Result<OldPdbData> {
     debug!("Parsing PDB with ezpdb-old (pdb crate 0.8)...");
     // ezpdb::parse_pdb takes a path and an optional base_address
-    let pdb_info = ezpdb_old::parse_pdb(path, None).context("Failed to parse PDB with ezpdb-old")?;
+    let pdb_info =
+        ezpdb_old::parse_pdb(path, None).context("Failed to parse PDB with ezpdb-old")?;
 
     // Extract header information
     let header = HeaderInfo {
@@ -74,33 +101,161 @@ pub fn parse_pdb(path: &Path) -> Result<OldPdbData> {
     let types = pdb_info
         .types
         .iter()
-        .map(|(index, type_ref)| {
+        .filter_map(|(index, type_ref)| {
             // Borrow the TypeRef to access the Type
             let borrowed = type_ref.borrow();
+
+            let mut fields = Vec::new();
+            let mut variants = Vec::new();
+            let mut base_classes = Vec::new();
+
             let (kind, name, size) = match &*borrowed {
                 ezpdb_old::type_info::Type::Primitive(p) => {
                     (format!("Primitive({:?})", p.kind), None, None)
                 }
                 ezpdb_old::type_info::Type::Class(c) => {
+                    // Extract fields from Class
+                    for field_ref in &c.fields {
+                        let field_borrowed = field_ref.borrow();
+                        match &*field_borrowed {
+                            ezpdb_old::type_info::Type::Member(m) => {
+                                // Extract bitfield info if the member's type is a bitfield
+                                let member_type_borrowed = m.underlying_type.borrow();
+                                let (type_kind, bitfield_length, bitfield_position) =
+                                    match &*member_type_borrowed {
+                                        ezpdb_old::type_info::Type::Bitfield(bf) => (
+                                            Some("Bitfield".to_string()),
+                                            Some(bf.len),
+                                            Some(bf.position),
+                                        ),
+                                        ezpdb_old::type_info::Type::Primitive(p) => {
+                                            (Some(format!("Primitive({:?})", p.kind)), None, None)
+                                        }
+                                        ezpdb_old::type_info::Type::Pointer(_) => {
+                                            (Some("Pointer".to_string()), None, None)
+                                        }
+                                        ezpdb_old::type_info::Type::Class(c) => {
+                                            (Some(format!("Class({})", c.name)), None, None)
+                                        }
+                                        ezpdb_old::type_info::Type::Union(u) => {
+                                            (Some(format!("Union({})", u.name)), None, None)
+                                        }
+                                        ezpdb_old::type_info::Type::Enumeration(e) => {
+                                            (Some(format!("Enumeration({})", e.name)), None, None)
+                                        }
+                                        ezpdb_old::type_info::Type::Array(_) => {
+                                            (Some("Array".to_string()), None, None)
+                                        }
+                                        _ => (Some("Other".to_string()), None, None),
+                                    };
+
+                                fields.push(FieldInfo {
+                                    name: m.name.clone(),
+                                    offset: Some(m.offset as u64),
+                                    type_index: None,
+                                    type_kind,
+                                    bitfield_length,
+                                    bitfield_position,
+                                });
+                            }
+                            ezpdb_old::type_info::Type::BaseClass(b) => {
+                                base_classes.push(BaseClassInfo {
+                                    name: None, // Could resolve from b.base_class if needed
+                                    offset: b.offset as u64,
+                                    type_index: None,
+                                });
+                            }
+                            ezpdb_old::type_info::Type::VirtualBaseClass(vb) => {
+                                base_classes.push(BaseClassInfo {
+                                    name: None,
+                                    offset: vb.base_pointer_offset as u64,
+                                    type_index: None,
+                                });
+                            }
+                            _ => {} // Skip other field types for now
+                        }
+                    }
                     ("Class".to_string(), Some(c.name.clone()), Some(c.size))
                 }
                 ezpdb_old::type_info::Type::Union(u) => {
+                    // Extract fields from Union
+                    for field_ref in &u.fields {
+                        let field_borrowed = field_ref.borrow();
+                        if let ezpdb_old::type_info::Type::Member(m) = &*field_borrowed {
+                            // Extract bitfield info if the member's type is a bitfield
+                            let member_type_borrowed = m.underlying_type.borrow();
+                            let (type_kind, bitfield_length, bitfield_position) =
+                                match &*member_type_borrowed {
+                                    ezpdb_old::type_info::Type::Bitfield(bf) => (
+                                        Some("Bitfield".to_string()),
+                                        Some(bf.len),
+                                        Some(bf.position),
+                                    ),
+                                    ezpdb_old::type_info::Type::Primitive(p) => {
+                                        (Some(format!("Primitive({:?})", p.kind)), None, None)
+                                    }
+                                    ezpdb_old::type_info::Type::Pointer(_) => {
+                                        (Some("Pointer".to_string()), None, None)
+                                    }
+                                    ezpdb_old::type_info::Type::Class(c) => {
+                                        (Some(format!("Class({})", c.name)), None, None)
+                                    }
+                                    ezpdb_old::type_info::Type::Union(u) => {
+                                        (Some(format!("Union({})", u.name)), None, None)
+                                    }
+                                    ezpdb_old::type_info::Type::Enumeration(e) => {
+                                        (Some(format!("Enumeration({})", e.name)), None, None)
+                                    }
+                                    ezpdb_old::type_info::Type::Array(_) => {
+                                        (Some("Array".to_string()), None, None)
+                                    }
+                                    _ => (Some("Other".to_string()), None, None),
+                                };
+
+                            fields.push(FieldInfo {
+                                name: m.name.clone(),
+                                offset: Some(m.offset as u64),
+                                type_index: None,
+                                type_kind,
+                                bitfield_length,
+                                bitfield_position,
+                            });
+                        }
+                    }
                     ("Union".to_string(), Some(u.name.clone()), Some(u.size))
                 }
                 ezpdb_old::type_info::Type::Enumeration(e) => {
+                    // Extract variants from Enumeration
+                    for variant in &e.variants {
+                        // Convert VariantValue to i64 for comparison
+                        let value = match variant.value {
+                            ezpdb_old::type_info::VariantValue::U8(v) => v as i64,
+                            ezpdb_old::type_info::VariantValue::U16(v) => v as i64,
+                            ezpdb_old::type_info::VariantValue::U32(v) => v as i64,
+                            ezpdb_old::type_info::VariantValue::U64(v) => v as i64,
+                            ezpdb_old::type_info::VariantValue::I8(v) => v as i64,
+                            ezpdb_old::type_info::VariantValue::I16(v) => v as i64,
+                            ezpdb_old::type_info::VariantValue::I32(v) => v as i64,
+                            ezpdb_old::type_info::VariantValue::I64(v) => v,
+                        };
+                        variants.push(VariantInfo {
+                            name: variant.name.clone(),
+                            value,
+                        });
+                    }
                     ("Enumeration".to_string(), Some(e.name.clone()), None)
                 }
                 ezpdb_old::type_info::Type::Pointer(_) => ("Pointer".to_string(), None, None),
                 ezpdb_old::type_info::Type::Array(_) => ("Array".to_string(), None, None),
                 ezpdb_old::type_info::Type::Procedure(_) => ("Procedure".to_string(), None, None),
-                ezpdb_old::type_info::Type::MemberFunction(_) => ("MemberFunction".to_string(), None, None),
+                ezpdb_old::type_info::Type::MemberFunction(_) => {
+                    ("MemberFunction".to_string(), None, None)
+                }
                 ezpdb_old::type_info::Type::BaseClass(_) => ("BaseClass".to_string(), None, None),
                 ezpdb_old::type_info::Type::VirtualBaseClass(_) => {
                     ("VirtualBaseClass".to_string(), None, None)
                 }
-                ezpdb_old::type_info::Type::VTable(_) => {
-                    ("VTable".to_string(), None, None)
-                }
+                ezpdb_old::type_info::Type::VTable(_) => ("VTable".to_string(), None, None),
                 ezpdb_old::type_info::Type::Member(m) => {
                     ("Member".to_string(), Some(m.name.clone()), None)
                 }
@@ -123,18 +278,24 @@ pub fn parse_pdb(path: &Path) -> Result<OldPdbData> {
                     ("Method".to_string(), Some(m.name.clone()), None)
                 }
                 ezpdb_old::type_info::Type::Bitfield(_) => ("Bitfield".to_string(), None, None),
-                ezpdb_old::type_info::Type::FieldList(_) => ("FieldList".to_string(), None, None),
-                ezpdb_old::type_info::Type::ArgumentList(_) => ("ArgumentList".to_string(), None, None),
-                ezpdb_old::type_info::Type::MethodList(_) => ("MethodList".to_string(), None, None),
+                // Filter out FieldList, MethodList, and ArgumentList as they are implementation details
+                // that shouldn't be compared as top-level types. The new parser correctly doesn't
+                // store these as standalone types.
+                ezpdb_old::type_info::Type::FieldList(_) => return None,
+                ezpdb_old::type_info::Type::ArgumentList(_) => return None,
+                ezpdb_old::type_info::Type::MethodList(_) => return None,
                 ezpdb_old::type_info::Type::Modifier(_) => ("Modifier".to_string(), None, None),
             };
 
-            TypeInfo {
+            Some(TypeInfo {
                 index: *index,
                 kind,
                 name,
                 size: size.map(|s| s as u64),
-            }
+                fields,
+                variants,
+                base_classes,
+            })
         })
         .collect();
 
@@ -184,8 +345,11 @@ pub fn parse_pdb(path: &Path) -> Result<OldPdbData> {
     // Extract modules
     // Note: The old ezpdb version on GitHub has private fields for DebugModule,
     // so we extract just the count for now. The real comparison is about symbols/types anyway.
-    debug!("Extracting {} modules (limited info due to private fields)", pdb_info.debug_modules.len());
-    
+    debug!(
+        "Extracting {} modules (limited info due to private fields)",
+        pdb_info.debug_modules.len()
+    );
+
     // Since we can't access the name/object_file_name fields (they're private in old ezpdb),
     // we'll create placeholder entries. This won't give us detailed module comparison,
     // but the important comparisons are symbols and types.

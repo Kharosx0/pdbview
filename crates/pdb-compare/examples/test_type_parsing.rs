@@ -349,6 +349,7 @@ fn get_type_name(data: &TypeData) -> &'static str {
         TypeData::VTableShape(_) => "VTableShape",
         TypeData::Pointer(_) => "Pointer",
         TypeData::Modifier(_) => "Modifier",
+        TypeData::Bitfield(_) => "Bitfield",
         TypeData::FieldList(_) => "FieldList",
         TypeData::MethodList(_) => "MethodList",
         TypeData::ArgList(_) => "ArgList",

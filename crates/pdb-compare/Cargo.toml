@@ -3,6 +3,14 @@ name = "pdb-compare"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "pdb_compare"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pdb-compare"
+path = "src/main.rs"
+
 [dependencies]
 # New ezpdb using ms-pdb (local)
 ezpdb = { path = "../ezpdb" }

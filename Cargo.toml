@@ -13,14 +13,14 @@ name = "pdbview"
 path = "crates/bin/main.rs"
 
 [workspace]
-members = ['crates/ezpdb', "crates/pdb-compare", 'crates/ms-pdb/codeview', 'crates/ms-pdb/msf', 'crates/ms-pdb/msfz', 'crates/ms-pdb/pdb']
+members = ['crates/ezpdb', "crates/pdb-compare", 'crates/ms-pdb/codeview', 'crates/ms-pdb/msf', 'crates/ms-pdb/msfz', 'crates/ms-pdb/pdb', 'crates/test_kprocess']
 
 [dependencies]
 pdb = "0.8"
 structopt = "0.3"
 thiserror = "1.0"
 log = "0.4"
-ezpdb = { version = "0.6", path = "crates/ezpdb", features = ['serde'] }
+ezpdb = { version = "0.7", path = "crates/ezpdb", features = ['serde'] }
 simplelog = "0.12"
 anyhow = "1.0"
 serde_json = "1.0"
@@ -55,4 +55,3 @@ uuid = "1.4.0"
 zerocopy = "0.8.14"
 zerocopy-derive = "0.8.14"
 zstd = "0.13.2"
-

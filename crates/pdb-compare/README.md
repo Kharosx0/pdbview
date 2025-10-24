@@ -8,15 +8,35 @@ This tool validates that the migration from the old `pdb` crate to the new `ms-p
 
 - **Header Information**: Age, GUID
 - **Type Information**: All types from TPI stream (classes, unions, enums, pointers, etc.)
+  - **Field Comparison**: Verifies struct/union fields match (count, names, offsets)
+  - **Variant Comparison**: Verifies enum variants match (count, names, values)
+  - **Size Comparison**: Verifies type sizes match between parsers
+  - **Base Class Comparison**: Verifies inheritance information matches
 - **Symbol Information**: Public symbols, procedures, data symbols
-- **Module Information**: Debug modules and their object files
+- **Module Information**: Debug modules and their object files</parameter>
 
-## Usage
+## Quick Start
 
-### Basic Usage
+### Run Integration Tests
+
+The fastest way to validate the comparison tool is to run the comprehensive integration tests:
+
+```bash
+cd crates/pdb-compare
+cargo test --test integration_tests -- --nocapture
+```
+
+This will test against all PDB files in the `cache_test_pdbs/` directory and report:
+- Type size mismatches
+- Missing or extra struct fields
+- Missing or extra enum variants
+- Issues with critical kernel types (_EPROCESS, _KPROCESS, etc.)
+
+### Basic CLI Usage
 
 ```bash
 cargo run -- --pdb-file path/to/your.pdb
+```</parameter>
 ```
 
 ### Options
@@ -128,6 +148,12 @@ The tool validates:
   - Same type kind (Class, Union, Enum, Pointer, etc.)
   - Same name (if applicable)
   - Same size (if applicable)
+  - **Same field count** (for structs/unions)
+  - **Same field names and offsets** (for structs/unions)
+  - **Same variant count** (for enums)
+  - **Same variant names and values** (for enums)
+  - **Same base class count and offsets** (for classes)</parameter>
+  - Same size (if applicable)
 
 ### Symbol Validation
 - Same number of public symbols, procedures, and data symbols
@@ -156,9 +182,16 @@ cargo run -p pdb-compare -- -p path/to/file.pdb
 The tool is organized into modules:
 
 - `main.rs`: CLI argument parsing, main flow, and multi-file processing
+- `lib.rs`: Library interface exposing modules for integration tests
 - `old_pdb.rs`: Parser using old `ezpdb` from GitHub (landaire/pdbview master branch, uses `pdb` crate v0.8)
+  - Extracts type information including fields, variants, and base classes
 - `new_pdb.rs`: Parser using new `ezpdb` from local workspace (uses `ms-pdb` crate)
+  - Extracts type information including fields, variants, and base classes
 - `compare.rs`: Comparison logic and difference reporting
+  - Compares field counts and names
+  - Compares enum variant counts and values
+  - Compares base class information
+- `tests/integration_tests.rs`: Comprehensive automated tests</parameter>
 
 ### Architecture
 
@@ -173,6 +206,13 @@ This approach compares the same high-level API rather than wrapping two differen
 The `examples/` directory contains utilities:
 - `check_sections.rs`: Analyzes section headers and offset calculations
 - `explore_dbi.rs`: Explores DBI stream information and module data
+- Various diagnostic tools for investigating parsing issues
+
+See `ENHANCED_COMPARISON_SUMMARY.md` for detailed information about:
+- What comparisons are performed
+- Issues found during testing
+- Recommendations for fixes
+- Test result summaries</parameter>
 
 ## Known Limitations
 
@@ -193,10 +233,34 @@ Some minor differences are expected due to implementation details and architectu
    - Old parser: ~995 data symbols (includes 8 duplicated non-function public symbols), ~4800-4900 procedures, ~6946 public symbols
    - New parser: ~987 data symbols (correct, no duplication), ~4844 procedures, ~6946 public symbols
 
+## Regression Detection
+
+This tool is designed to catch regressions in the new ezpdb implementation. The integration tests will:
+
+- ✅ **Pass** if the new parser finds all data the old parser found
+- ⚠️ **Warn** if there are minor differences that don't affect functionality
+- ❌ **Fail** if the new parser is missing data (fields, variants, types) that the old parser found
+
+This ensures the new implementation is a **strict improvement** over the old one.
+
+### Known Issues Detected
+
+As of the latest test run, the following issues have been identified:
+
+1. **Missing Struct Fields**: Some structs are missing fields in the new parser
+   - Example: `_EPROCESS` has 261 fields in old parser, only 163 in new parser
+   - Example: `_KHETERO_STATE` has 4 fields in old parser, only 1 in new parser
+
+2. **Root Cause**: Possible issues with field list continuation chain parsing or field type filtering
+
+See `ENHANCED_COMPARISON_SUMMARY.md` for detailed analysis and recommendations.
+
 ## Contributing
 
 When adding new features to `ezpdb`, update this tool to validate:
 
 1. Add new fields to comparison structures in `old_pdb.rs` and `new_pdb.rs`
 2. Add comparison logic in `compare.rs`
-3. Test against various PDB files to ensure compatibility
+3. Add integration tests in `tests/integration_tests.rs`
+4. Test against various PDB files to ensure compatibility
+5. Ensure all tests pass before merging changes</parameter>

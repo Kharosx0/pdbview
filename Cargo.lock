@@ -62,7 +62,7 @@ version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e231f6134f61b71076a3eab506c379d4f36122f2af15a9ff04415ea4c3339e2"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys",
 ]
 
 [[package]]
@@ -73,7 +73,7 @@ checksum = "3e0633414522a32ffaac8ac6cc8f748e090c5717661fddeea04219e2344f5f2a"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys",
 ]
 
 [[package]]
@@ -222,7 +222,7 @@ dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "syn 2.0.107",
+ "syn 2.0.108",
 ]
 
 [[package]]
@@ -287,25 +287,25 @@ dependencies = [
 [[package]]
 name = "ezpdb"
 version = "0.6.0"
-dependencies = [
- "anyhow",
- "log",
- "ms-pdb",
- "serde",
- "thiserror",
- "uuid",
- "zerocopy 0.8.27",
-]
-
-[[package]]
-name = "ezpdb"
-version = "0.6.0"
 source = "git+https://github.com/landaire/pdbview?branch=master#f9be6c394d93e8f2fd415df6ee15495aac316648"
 dependencies = [
  "log",
  "pdb",
  "thiserror",
  "uuid",
+]
+
+[[package]]
+name = "ezpdb"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "ms-pdb 0.1.11 (git+https://github.com/Kharosx0/pdb-rs.git?branch=bitfield_support)",
+ "serde",
+ "thiserror",
+ "uuid",
+ "zerocopy 0.8.27",
 ]
 
 [[package]]
@@ -388,9 +388,9 @@ dependencies = [
 
 [[package]]
 name = "is_terminal_polyfill"
-version = "1.70.1"
+version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
+checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "itoa"
@@ -419,7 +419,7 @@ checksum = "03343451ff899767262ec32146f6d559dd759fdadf42ff0e227c7c48f72594b4"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.107",
+ "syn 2.0.108",
 ]
 
 [[package]]
@@ -509,7 +509,23 @@ dependencies = [
 
 [[package]]
 name = "ms-codeview"
-version = "0.1.1"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "bitfield",
+ "bitflags 2.10.0",
+ "bstr",
+ "pretty-hex",
+ "tracing",
+ "uuid",
+ "zerocopy 0.8.27",
+ "zerocopy-derive 0.8.27",
+]
+
+[[package]]
+name = "ms-codeview"
+version = "0.1.2"
+source = "git+https://github.com/Kharosx0/pdb-rs.git?branch=bitfield_support#1809c42dc4cd40f8f4e130b94b9dc80dd1daab1f"
 dependencies = [
  "anyhow",
  "bitfield",
@@ -524,16 +540,16 @@ dependencies = [
 
 [[package]]
 name = "ms-pdb"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "bitfield",
  "bitflags 2.10.0",
  "bitvec",
  "bstr",
- "ms-codeview",
- "ms-pdb-msf",
- "ms-pdb-msfz",
+ "ms-codeview 0.1.2",
+ "ms-pdb-msf 0.1.4",
+ "ms-pdb-msfz 0.1.6",
  "pow2",
  "pretty-hex",
  "static_assertions",
@@ -541,6 +557,29 @@ dependencies = [
  "sync_file",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+ "zerocopy 0.8.27",
+ "zerocopy-derive 0.8.27",
+]
+
+[[package]]
+name = "ms-pdb"
+version = "0.1.11"
+source = "git+https://github.com/Kharosx0/pdb-rs.git?branch=bitfield_support#1809c42dc4cd40f8f4e130b94b9dc80dd1daab1f"
+dependencies = [
+ "anyhow",
+ "bitfield",
+ "bitflags 2.10.0",
+ "bitvec",
+ "bstr",
+ "ms-codeview 0.1.2 (git+https://github.com/Kharosx0/pdb-rs.git?branch=bitfield_support)",
+ "ms-pdb-msf 0.1.4 (git+https://github.com/Kharosx0/pdb-rs.git?branch=bitfield_support)",
+ "ms-pdb-msfz 0.1.6 (git+https://github.com/Kharosx0/pdb-rs.git?branch=bitfield_support)",
+ "pow2",
+ "pretty-hex",
+ "static_assertions",
+ "sync_file",
+ "tracing",
  "uuid",
  "zerocopy 0.8.27",
  "zerocopy-derive 0.8.27",
@@ -560,6 +599,22 @@ dependencies = [
  "sync_file",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+ "zerocopy 0.8.27",
+ "zerocopy-derive 0.8.27",
+]
+
+[[package]]
+name = "ms-pdb-msf"
+version = "0.1.4"
+source = "git+https://github.com/Kharosx0/pdb-rs.git?branch=bitfield_support#1809c42dc4cd40f8f4e130b94b9dc80dd1daab1f"
+dependencies = [
+ "anyhow",
+ "bitvec",
+ "pow2",
+ "static_assertions",
+ "sync_file",
+ "tracing",
  "uuid",
  "zerocopy 0.8.27",
  "zerocopy-derive 0.8.27",
@@ -587,12 +642,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ms-pdb-msfz"
+version = "0.1.6"
+source = "git+https://github.com/Kharosx0/pdb-rs.git?branch=bitfield_support#1809c42dc4cd40f8f4e130b94b9dc80dd1daab1f"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "pow2",
+ "static_assertions",
+ "sync_file",
+ "tracing",
+ "zerocopy 0.8.27",
+ "zerocopy-derive 0.8.27",
+ "zstd",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys",
 ]
 
 [[package]]
@@ -618,9 +689,9 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "once_cell_polyfill"
-version = "1.70.1"
+version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
+checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "parking_lot"
@@ -664,9 +735,9 @@ dependencies = [
  "clap 4.5.50",
  "env_logger",
  "ezpdb 0.6.0",
- "ezpdb 0.6.0 (git+https://github.com/landaire/pdbview?branch=master)",
+ "ezpdb 0.7.0",
  "log",
- "ms-pdb",
+ "ms-pdb 0.1.11",
  "serde",
  "serde_json",
 ]
@@ -676,7 +747,7 @@ name = "pdbview"
 version = "0.6.0"
 dependencies = [
  "anyhow",
- "ezpdb 0.6.0",
+ "ezpdb 0.7.0",
  "log",
  "pdb",
  "serde_json",
@@ -760,9 +831,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.101"
+version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89ae43fd86e4158d6db51ad8e2b80f313af9cc74f5c0e03ccb87de09998732de"
+checksum = "8e0f6df8eaa422d97d72edcd152e1451618fed47fabbdbd5a8864167b1d4aff7"
 dependencies = [
  "unicode-ident",
 ]
@@ -883,7 +954,7 @@ checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.107",
+ "syn 2.0.108",
 ]
 
 [[package]]
@@ -1020,9 +1091,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.107"
+version = "2.0.108"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a26dbd934e5451d21ef060c018dae56fc073894c5a7896f882928a76e6d081b"
+checksum = "da58917d35242480a05c2897064da0a80589a2a0476c9a3f2fdc83b53502e917"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1054,6 +1125,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_kprocess"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ezpdb 0.7.0",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1079,7 +1158,7 @@ checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.107",
+ "syn 2.0.108",
 ]
 
 [[package]]
@@ -1143,7 +1222,7 @@ checksum = "81383ab64e72a7a8b8e13130c49e3dab29def6d0c7d76a03087b3cf71c5c6903"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.107",
+ "syn 2.0.108",
 ]
 
 [[package]]
@@ -1219,9 +1298,9 @@ dependencies = [
 
 [[package]]
 name = "unicode-ident"
-version = "1.0.19"
+version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f63a545481291138910575129486daeaf8ac54aee4387fe7906919f7830c7d9d"
+checksum = "462eeb75aeb73aea900253ce739c8e18a67423fadf006037cd3ff27e82748a06"
 
 [[package]]
 name = "unicode-segmentation"
@@ -1307,7 +1386,7 @@ dependencies = [
  "log",
  "proc-macro2",
  "quote",
- "syn 2.0.107",
+ "syn 2.0.108",
  "wasm-bindgen-shared",
 ]
 
@@ -1329,7 +1408,7 @@ checksum = "9f07d2f20d4da7b26400c9f4a0511e6e0345b040694e8a75bd41d578fa4421d7"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.107",
+ "syn 2.0.108",
  "wasm-bindgen-backend",
  "wasm-bindgen-shared",
 ]
@@ -1365,7 +1444,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys",
 ]
 
 [[package]]
@@ -1428,7 +1507,7 @@ checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.107",
+ "syn 2.0.108",
 ]
 
 [[package]]
@@ -1439,7 +1518,7 @@ checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.107",
+ "syn 2.0.108",
 ]
 
 [[package]]
@@ -1489,15 +1568,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb"
 dependencies = [
  "windows-targets 0.53.5",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.61.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
-dependencies = [
- "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -1680,7 +1750,7 @@ checksum = "fa4f8080344d4671fb4e831a13ad1e68092748387dfc4f55e356242fae12ce3e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.107",
+ "syn 2.0.108",
 ]
 
 [[package]]
@@ -1691,7 +1761,7 @@ checksum = "88d2b8d9c68ad2b9e4340d7832716a4d21a22a1154777ad56ea55c51a9cf3831"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.107",
+ "syn 2.0.108",
 ]
 
 [[package]]

@@ -1,5 +1,5 @@
-use crate::old_pdb::OldPdbData;
 use crate::new_pdb::NewPdbData;
+use crate::old_pdb::OldPdbData;
 use log::debug;
 
 #[derive(Debug, serde::Serialize)]
@@ -26,7 +26,12 @@ pub struct Difference {
 }
 
 impl Difference {
-    pub fn new(category: &str, description: &str, old_value: Option<String>, new_value: Option<String>) -> Self {
+    pub fn new(
+        category: &str,
+        description: &str,
+        old_value: Option<String>,
+        new_value: Option<String>,
+    ) -> Self {
         Difference {
             category: category.to_string(),
             description: description.to_string(),
@@ -69,7 +74,10 @@ pub fn compare_pdbs(old: &OldPdbData, new: &NewPdbData) -> ComparisonResult {
         module_count_matches,
     };
 
-    debug!("Comparison complete: {} differences found", differences.len());
+    debug!(
+        "Comparison complete: {} differences found",
+        differences.len()
+    );
 
     ComparisonResult {
         summary,
@@ -195,11 +203,7 @@ fn compare_module_counts(
     }
 }
 
-fn compare_types(
-    old: &OldPdbData,
-    new: &NewPdbData,
-    differences: &mut Vec<Difference>,
-) {
+fn compare_types(old: &OldPdbData, new: &NewPdbData, differences: &mut Vec<Difference>) {
     debug!("Comparing types in detail...");
 
     // Create indices for quick lookup
@@ -241,6 +245,193 @@ fn compare_types(
                     Some(format!("{:?}", new_type.size)),
                 ));
             }
+
+            // Compare field count
+            if old_type.fields.len() != new_type.fields.len() {
+                differences.push(Difference::new(
+                    "types",
+                    &format!(
+                        "Type {} ({:?}) field count mismatch",
+                        old_type.index, old_type.name
+                    ),
+                    Some(format!("{} fields", old_type.fields.len())),
+                    Some(format!("{} fields", new_type.fields.len())),
+                ));
+            }
+
+            // Compare fields in detail
+            for old_field in &old_type.fields {
+                let matching_field = new_type.fields.iter().find(|f| f.name == old_field.name);
+                if let Some(new_field) = matching_field {
+                    // Compare field offset
+                    if old_field.offset != new_field.offset {
+                        differences.push(Difference::new(
+                            "types",
+                            &format!(
+                                "Type {} ({:?}) field '{}' offset mismatch",
+                                old_type.index, old_type.name, old_field.name
+                            ),
+                            Some(format!("{:?}", old_field.offset)),
+                            Some(format!("{:?}", new_field.offset)),
+                        ));
+                    }
+
+                    // Compare field type kind
+                    if old_field.type_kind != new_field.type_kind {
+                        differences.push(Difference::new(
+                            "types",
+                            &format!(
+                                "Type {} ({:?}) field '{}' type kind mismatch",
+                                old_type.index, old_type.name, old_field.name
+                            ),
+                            Some(format!("{:?}", old_field.type_kind)),
+                            Some(format!("{:?}", new_field.type_kind)),
+                        ));
+                    }
+
+                    // Compare bitfield length if present
+                    if old_field.bitfield_length != new_field.bitfield_length {
+                        differences.push(Difference::new(
+                            "types",
+                            &format!(
+                                "Type {} ({:?}) field '{}' bitfield length mismatch",
+                                old_type.index, old_type.name, old_field.name
+                            ),
+                            Some(format!("{:?}", old_field.bitfield_length)),
+                            Some(format!("{:?}", new_field.bitfield_length)),
+                        ));
+                    }
+
+                    // Compare bitfield position if present
+                    if old_field.bitfield_position != new_field.bitfield_position {
+                        differences.push(Difference::new(
+                            "types",
+                            &format!(
+                                "Type {} ({:?}) field '{}' bitfield position mismatch",
+                                old_type.index, old_type.name, old_field.name
+                            ),
+                            Some(format!("{:?}", old_field.bitfield_position)),
+                            Some(format!("{:?}", new_field.bitfield_position)),
+                        ));
+                    }
+                } else {
+                    differences.push(Difference::new(
+                        "types",
+                        &format!(
+                            "Type {} ({:?}) field '{}' missing in new parser",
+                            old_type.index, old_type.name, old_field.name
+                        ),
+                        Some(format!("{:?}", old_field)),
+                        None,
+                    ));
+                }
+            }
+
+            // Check for fields in new but not in old
+            for new_field in &new_type.fields {
+                if !old_type.fields.iter().any(|f| f.name == new_field.name) {
+                    differences.push(Difference::new(
+                        "types",
+                        &format!(
+                            "Type {} ({:?}) field '{}' only in new parser",
+                            old_type.index, old_type.name, new_field.name
+                        ),
+                        None,
+                        Some(format!("{:?}", new_field)),
+                    ));
+                }
+            }
+
+            // Compare variant count (for enums)
+            if old_type.variants.len() != new_type.variants.len() {
+                differences.push(Difference::new(
+                    "types",
+                    &format!(
+                        "Type {} ({:?}) variant count mismatch",
+                        old_type.index, old_type.name
+                    ),
+                    Some(format!("{} variants", old_type.variants.len())),
+                    Some(format!("{} variants", new_type.variants.len())),
+                ));
+            }
+
+            // Compare variants in detail
+            for old_variant in &old_type.variants {
+                let matching_variant = new_type
+                    .variants
+                    .iter()
+                    .find(|v| v.name == old_variant.name);
+                if let Some(new_variant) = matching_variant {
+                    // Compare variant value
+                    if old_variant.value != new_variant.value {
+                        differences.push(Difference::new(
+                            "types",
+                            &format!(
+                                "Type {} ({:?}) variant '{}' value mismatch",
+                                old_type.index, old_type.name, old_variant.name
+                            ),
+                            Some(format!("{}", old_variant.value)),
+                            Some(format!("{}", new_variant.value)),
+                        ));
+                    }
+                } else {
+                    differences.push(Difference::new(
+                        "types",
+                        &format!(
+                            "Type {} ({:?}) variant '{}' missing in new parser",
+                            old_type.index, old_type.name, old_variant.name
+                        ),
+                        Some(format!("{:?}", old_variant)),
+                        None,
+                    ));
+                }
+            }
+
+            // Check for variants in new but not in old
+            for new_variant in &new_type.variants {
+                if !old_type.variants.iter().any(|v| v.name == new_variant.name) {
+                    differences.push(Difference::new(
+                        "types",
+                        &format!(
+                            "Type {} ({:?}) variant '{}' only in new parser",
+                            old_type.index, old_type.name, new_variant.name
+                        ),
+                        None,
+                        Some(format!("{:?}", new_variant)),
+                    ));
+                }
+            }
+
+            // Compare base class count
+            if old_type.base_classes.len() != new_type.base_classes.len() {
+                differences.push(Difference::new(
+                    "types",
+                    &format!(
+                        "Type {} ({:?}) base class count mismatch",
+                        old_type.index, old_type.name
+                    ),
+                    Some(format!("{} base classes", old_type.base_classes.len())),
+                    Some(format!("{} base classes", new_type.base_classes.len())),
+                ));
+            }
+
+            // Compare base classes in detail
+            for (i, old_base) in old_type.base_classes.iter().enumerate() {
+                if let Some(new_base) = new_type.base_classes.get(i) {
+                    // Compare base class offset
+                    if old_base.offset != new_base.offset {
+                        differences.push(Difference::new(
+                            "types",
+                            &format!(
+                                "Type {} ({:?}) base class {} offset mismatch",
+                                old_type.index, old_type.name, i
+                            ),
+                            Some(format!("{}", old_base.offset)),
+                            Some(format!("{}", new_base.offset)),
+                        ));
+                    }
+                }
+            }
         } else {
             differences.push(Difference::new(
                 "types",
@@ -264,19 +455,23 @@ fn compare_types(
     }
 }
 
-fn compare_symbols(
-    old: &OldPdbData,
-    new: &NewPdbData,
-    differences: &mut Vec<Difference>,
-) {
+fn compare_symbols(old: &OldPdbData, new: &NewPdbData, differences: &mut Vec<Difference>) {
     debug!("Comparing symbols in detail...");
 
     // Compare public symbols
     use std::collections::HashMap;
-    let old_public: HashMap<&str, &crate::old_pdb::PublicSymbol> =
-        old.symbols.public_symbols.iter().map(|s| (s.name.as_str(), s)).collect();
-    let new_public: HashMap<&str, &crate::new_pdb::PublicSymbol> =
-        new.symbols.public_symbols.iter().map(|s| (s.name.as_str(), s)).collect();
+    let old_public: HashMap<&str, &crate::old_pdb::PublicSymbol> = old
+        .symbols
+        .public_symbols
+        .iter()
+        .map(|s| (s.name.as_str(), s))
+        .collect();
+    let new_public: HashMap<&str, &crate::new_pdb::PublicSymbol> = new
+        .symbols
+        .public_symbols
+        .iter()
+        .map(|s| (s.name.as_str(), s))
+        .collect();
 
     for (name, old_sym) in &old_public {
         if let Some(new_sym) = new_public.get(name) {
@@ -319,10 +514,18 @@ fn compare_symbols(
     }
 
     // Compare procedures
-    let old_procs: HashMap<&str, &crate::old_pdb::ProcedureSymbol> =
-        old.symbols.procedures.iter().map(|p| (p.name.as_str(), p)).collect();
-    let new_procs: HashMap<&str, &crate::new_pdb::ProcedureSymbol> =
-        new.symbols.procedures.iter().map(|p| (p.name.as_str(), p)).collect();
+    let old_procs: HashMap<&str, &crate::old_pdb::ProcedureSymbol> = old
+        .symbols
+        .procedures
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
+    let new_procs: HashMap<&str, &crate::new_pdb::ProcedureSymbol> = new
+        .symbols
+        .procedures
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
 
     for (name, old_proc) in &old_procs {
         if let Some(new_proc) = new_procs.get(name) {
@@ -365,10 +568,18 @@ fn compare_symbols(
     }
 
     // Compare data symbols
-    let old_data: HashMap<&str, &crate::old_pdb::DataSymbol> =
-        old.symbols.data_symbols.iter().map(|d| (d.name.as_str(), d)).collect();
-    let new_data: HashMap<&str, &crate::new_pdb::DataSymbol> =
-        new.symbols.data_symbols.iter().map(|d| (d.name.as_str(), d)).collect();
+    let old_data: HashMap<&str, &crate::old_pdb::DataSymbol> = old
+        .symbols
+        .data_symbols
+        .iter()
+        .map(|d| (d.name.as_str(), d))
+        .collect();
+    let new_data: HashMap<&str, &crate::new_pdb::DataSymbol> = new
+        .symbols
+        .data_symbols
+        .iter()
+        .map(|d| (d.name.as_str(), d))
+        .collect();
 
     for (name, old_dat) in &old_data {
         if let Some(new_dat) = new_data.get(name) {
@@ -402,11 +613,7 @@ fn compare_symbols(
     }
 }
 
-fn compare_modules(
-    old: &OldPdbData,
-    new: &NewPdbData,
-    differences: &mut Vec<Difference>,
-) {
+fn compare_modules(old: &OldPdbData, new: &NewPdbData, differences: &mut Vec<Difference>) {
     debug!("Comparing modules in detail...");
 
     use std::collections::HashMap;
