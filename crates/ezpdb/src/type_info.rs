@@ -1725,12 +1725,8 @@ impl TryFrom<FromFuncId<'_, '_>> for FuncIdType {
             // FuncId.function_type references a Procedure (TPI type) - check TPI first
             if let Some(typ) = crate::lookup_tpi_type(type_idx.0, output_pdb) {
                 Some(typ)
-            } else if let Some(typ) = crate::lookup_ipi_type(type_idx.0, output_pdb) {
-                Some(typ)
             } else {
-                // Not yet parsed - try to parse from TPI stream first, then IPI as fallback
-                // This is a cross-stream reference (IPI -> TPI)
-                None // For now, leave as None if not found
+                crate::lookup_ipi_type(type_idx.0, output_pdb)
             }
         } else {
             None
@@ -1788,10 +1784,8 @@ impl TryFrom<FromMFuncId<'_, '_>> for MFuncIdType {
             // MFuncId.function_type references a MemberFunction (TPI type) - check TPI first
             if let Some(typ) = crate::lookup_tpi_type(type_idx.0, output_pdb) {
                 Some(typ)
-            } else if let Some(typ) = crate::lookup_ipi_type(type_idx.0, output_pdb) {
-                Some(typ)
             } else {
-                None // Cross-stream reference
+                crate::lookup_ipi_type(type_idx.0, output_pdb)
             }
         } else {
             None
@@ -1802,10 +1796,8 @@ impl TryFrom<FromMFuncId<'_, '_>> for MFuncIdType {
             // MFuncId.parent_type references a Class (TPI type) - check TPI first
             if let Some(typ) = crate::lookup_tpi_type(type_idx.0, output_pdb) {
                 Some(typ)
-            } else if let Some(typ) = crate::lookup_ipi_type(type_idx.0, output_pdb) {
-                Some(typ)
             } else {
-                None // Cross-stream reference
+                crate::lookup_ipi_type(type_idx.0, output_pdb)
             }
         } else {
             None

@@ -8,26 +8,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Parsing PDB: {}", pdb_path);
     let parsed_pdb = ezpdb::parse_pdb(Path::new(&pdb_path), None)?;
-    
+
     println!("Analyzing data symbols with IPI types...\n");
-    
+
     for data in parsed_pdb.global_data.iter() {
-        if let Some(offset) = data.offset {
+        if let Some(rva) = data.rva {
             let borrowed_type = data.ty.borrow();
             let type_name = format!("{:?}", borrowed_type);
-            
+
             // Check if this is an IPI type
-            if type_name.contains("FuncId") 
-                || type_name.contains("MFuncId") 
-                || type_name.contains("StringId") 
-                || type_name.contains("SubStrList") 
+            if type_name.contains("FuncId")
+                || type_name.contains("MFuncId")
+                || type_name.contains("StringId")
+                || type_name.contains("SubStrList")
                 || type_name.contains("BuildInfo")
-                || type_name.contains("UdtSrcLine") {
-                
+                || type_name.contains("UdtSrcLine")
+            {
                 println!("=== Symbol: {} ===", data.name);
-                println!("  Offset: 0x{:x}", offset);
+                println!("  RVA: 0x{:x}", rva);
                 println!("  Type: {}", type_name.lines().next().unwrap_or(""));
-                
+
                 // Look at the actual type details
                 if type_name.contains("FuncId") {
                     println!("  ⚠️  This is a FUNCTION ID - not a data type!");
@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else if type_name.contains("BuildInfo") {
                     println!("  📝 This is build/compiler info");
                 }
-                
+
                 // Try to extract more details from the type
                 let type_details = format!("{:#?}", borrowed_type);
                 let lines: Vec<&str> = type_details.lines().take(10).collect();
@@ -53,6 +53,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    
+
     Ok(())
 }

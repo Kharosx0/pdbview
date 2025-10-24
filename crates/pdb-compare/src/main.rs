@@ -547,7 +547,7 @@ fn run_api_test(pdb_files: &[PathBuf]) -> Result<()> {
                 .zip(new_pdb.public_symbols.iter())
                 .take(10)
             {
-                if old_sym.name != new_sym.name || old_sym.offset != new_sym.offset {
+                if old_sym.name != new_sym.name || old_sym.offset != new_sym.rva {
                     symbol_mismatches += 1;
                 }
             }

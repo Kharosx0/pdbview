@@ -334,13 +334,43 @@ impl From<&ms_pdb::dbi::ModuleInfo<'_>> for DebugModule {
 
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
+/// A public symbol exported from a module.
+///
+/// Public symbols represent functions or data that are exported and can be
+/// referenced by external modules.
 pub struct PublicSymbol {
+    /// The name of the symbol.
     pub name: String,
+
+    /// True if this symbol represents executable code.
     pub is_code: bool,
+
+    /// True if this symbol represents a function.
     pub is_function: bool,
+
+    /// True if this symbol is managed code.
     pub is_managed: bool,
+
+    /// True if this symbol is MSIL (Microsoft Intermediate Language).
     pub is_msil: bool,
-    pub offset: Option<usize>,
+
+    /// The section number this symbol is located in (1-based).
+    /// None if the section is invalid (0).
+    pub section: Option<u16>,
+
+    /// The offset within the section (file offset, not RVA).
+    /// This is the raw offset value from the PDB.
+    pub section_offset: u32,
+
+    /// The Relative Virtual Address (RVA) of this symbol.
+    /// This is computed by adding the section's virtual_address to section_offset.
+    /// None if the section is invalid or section headers couldn't be loaded.
+    pub rva: Option<usize>,
+
+    /// The absolute virtual address of this symbol.
+    /// This is the RVA plus the base_address (if provided during parsing).
+    /// None if RVA is None or no base_address was provided.
+    pub address: Option<usize>,
 }
 
 impl
@@ -361,24 +391,28 @@ impl
             &ms_pdb::tpi::TypeStream<Vec<u8>>,
         ),
     ) -> Self {
-        let (pdb, guid, sym, _base_address, _type_stream) = data;
+        let (pdb, guid, sym, base_address, _type_stream) = data;
 
         let offset_segment = sym.offset_segment();
+        let section_num = offset_segment.segment.get();
+        let section_offset = offset_segment.offset.get();
 
-        if offset_segment.segment.get() == 0 {
+        // Validate section number
+        let section = if section_num == 0 {
             warn!(
-                "symbol type has an invalid section index and RVA will be invalid: {:?}",
-                sym
-            )
-        }
+                "symbol '{}' has an invalid section index (0) and RVA will be invalid",
+                sym.name
+            );
+            None
+        } else {
+            Some(section_num)
+        };
 
         // Convert section:offset to RVA using the section map
-        let offset = crate::section_offset_to_rva(
-            pdb,
-            guid,
-            offset_segment.segment.get(),
-            offset_segment.offset.get(),
-        );
+        let rva = crate::section_offset_to_rva(pdb, guid, section_num, section_offset);
+
+        // Compute absolute address if base_address is provided
+        let address = rva.and_then(|r| base_address.map(|base| r + base));
 
         // Extract flags from the PubFixed structure
         let flags = sym.fixed.flags.get();
@@ -393,23 +427,51 @@ impl
             is_function,
             is_managed,
             is_msil,
-            offset,
+            section,
+            section_offset,
+            rva,
+            address,
         }
     }
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
+/// A data symbol (global or local variable).
+///
+/// Data symbols represent variables that have storage in the program,
+/// either as global/static variables or module-local variables.
 pub struct Data {
+    /// The name of the data symbol.
     pub name: String,
 
+    /// True if this is a global data symbol (S_GDATA32/S_GMANDATA).
+    /// False if this is a local/module data symbol (S_LDATA32/S_LMANDATA).
     pub is_global: bool,
 
+    /// True if this is managed data (S_GMANDATA/S_LMANDATA).
     pub is_managed: bool,
 
+    /// The type of this data symbol.
     pub ty: TypeRef,
 
-    pub offset: Option<usize>,
+    /// The section number this symbol is located in (1-based).
+    /// None if the section is invalid (0).
+    pub section: Option<u16>,
+
+    /// The offset within the section (file offset, not RVA).
+    /// This is the raw offset value from the PDB.
+    pub section_offset: u32,
+
+    /// The Relative Virtual Address (RVA) of this symbol.
+    /// This is computed by adding the section's virtual_address to section_offset.
+    /// None if the section is invalid or section headers couldn't be loaded.
+    pub rva: Option<usize>,
+
+    /// The absolute virtual address of this symbol.
+    /// This is the RVA plus the base_address (if provided during parsing).
+    /// None if RVA is None or no base_address was provided.
+    pub address: Option<usize>,
 }
 
 impl
@@ -436,19 +498,30 @@ impl
             &HashMap<TypeIndexNumber, TypeRef>,
         ),
     ) -> Result<Self, Self::Error> {
-        let (pdb, guid, sym, _base_address, _type_stream, parsed_tpi_types, _parsed_ipi_types) =
+        let (pdb, guid, sym, base_address, _type_stream, parsed_tpi_types, _parsed_ipi_types) =
             data;
 
         let offset_segment = sym.header.offset_segment;
         let type_index = sym.header.type_.get();
+        let section_num = offset_segment.segment.get();
+        let section_offset = offset_segment.offset.get();
+
+        // Validate section number
+        let section = if section_num == 0 {
+            warn!(
+                "data symbol '{}' has an invalid section index (0) and RVA will be invalid",
+                sym.name
+            );
+            None
+        } else {
+            Some(section_num)
+        };
 
         // Convert section:offset to RVA using the section map
-        let offset = crate::section_offset_to_rva(
-            pdb,
-            guid,
-            offset_segment.segment.get(),
-            offset_segment.offset.get(),
-        );
+        let rva = crate::section_offset_to_rva(pdb, guid, section_num, section_offset);
+
+        // Compute absolute address if base_address is provided
+        let address = rva.and_then(|r| base_address.map(|base| r + base));
 
         // Resolve type index: Data symbols should ONLY reference TPI types (data types)
         // IPI types are metadata (FuncId, BuildInfo, etc.) and should never be referenced by data symbols
@@ -468,7 +541,10 @@ impl
             is_global: true,   // Set by handle_symbol() based on SymKind
             is_managed: false, // Set by handle_symbol() based on SymKind
             ty,
-            offset,
+            section,
+            section_offset,
+            rva,
+            address,
         };
 
         Ok(data)
@@ -477,21 +553,54 @@ impl
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
+/// A procedure (function) symbol.
+///
+/// Procedures represent executable functions in the program with debug information
+/// about their location, size, and prologue/epilogue boundaries.
 pub struct Procedure {
+    /// The name of the procedure/function.
     pub name: String,
 
+    /// A string representation of the function signature (for debugging).
     pub signature: Option<String>,
+
+    /// The type index for the procedure's type information.
     pub type_index: TypeIndexNumber,
 
-    /// This reflects the RVA in the transformed address space. See [PdbInternalSectionOffset docs](https://docs.rs/pdb/latest/pdb/struct.PdbInternalSectionOffset.html)
-    /// for more details.
+    /// The section number this procedure is located in (1-based).
+    /// None if the section is invalid (0).
+    pub section: Option<u16>,
+
+    /// The offset within the section where this procedure starts (file offset, not RVA).
+    /// This is the raw offset value from the PDB.
+    pub section_offset: u32,
+
+    /// The Relative Virtual Address (RVA) of this procedure's entry point.
+    /// This is computed by adding the section's virtual_address to section_offset.
+    /// None if the section is invalid or section headers couldn't be loaded.
+    pub rva: Option<usize>,
+
+    /// The absolute virtual address of this procedure's entry point.
+    /// This is the RVA plus the base_address (if provided during parsing).
+    /// None if RVA is None or no base_address was provided.
     pub address: Option<usize>,
+
+    /// The length of this procedure in bytes.
     pub len: usize,
 
+    /// True if this is a global procedure (S_GPROC32/S_GPROC32_ID).
+    /// False if this is a local/module procedure (S_LPROC32/S_LPROC32_ID).
     pub is_global: bool,
+
+    /// True if this is a DPC (Deferred Procedure Call) procedure.
     pub is_dpc: bool,
-    /// length of this procedure in BYTES
+
+    /// Offset in bytes from the procedure start to the end of the prologue.
+    /// This is where the function's main body begins after setup code.
     pub prologue_end: usize,
+
+    /// Offset in bytes from the procedure start to the start of the epilogue.
+    /// This is where the function's cleanup code begins before returning.
     pub epilogue_start: usize,
 }
 
@@ -513,25 +622,29 @@ impl
             &ms_pdb::tpi::TypeStream<Vec<u8>>,
         ),
     ) -> Self {
-        let (pdb, guid, sym, _base_address, type_stream) = data;
+        let (pdb, guid, sym, base_address, type_stream) = data;
 
         let offset_segment = sym.fixed.offset_segment;
         let type_index = sym.fixed.proc_type.get();
+        let section_num = offset_segment.segment.get();
+        let section_offset = offset_segment.offset.get();
 
-        if offset_segment.segment.get() == 0 {
+        // Validate section number
+        let section = if section_num == 0 {
             warn!(
-                "symbol type has an invalid section index and RVA will be invalid: {:?}",
-                sym
-            )
-        }
+                "procedure '{}' has an invalid section index (0) and RVA will be invalid",
+                sym.name
+            );
+            None
+        } else {
+            Some(section_num)
+        };
 
         // Convert section:offset to RVA using the section map
-        let address = crate::section_offset_to_rva(
-            pdb,
-            guid,
-            offset_segment.segment.get(),
-            offset_segment.offset.get(),
-        );
+        let rva = crate::section_offset_to_rva(pdb, guid, section_num, section_offset);
+
+        // Compute absolute address if base_address is provided
+        let address = rva.and_then(|r| base_address.map(|base| r + base));
 
         // Try to get the signature from the type stream
         let signature = type_stream.record(type_index).ok().map(|type_info| {
@@ -547,6 +660,9 @@ impl
             name: sym.name.to_string(),
             signature,
             type_index: type_index.0,
+            section,
+            section_offset,
+            rva,
             address,
             len: sym.fixed.proc_len.get() as usize,
             is_global: true, // Set by handle_symbol() based on SymKind

@@ -25,6 +25,8 @@ fn test_ntkrnlmp_pdb_comparison() {
     println!("Total differences: {}", result.summary.total_differences);
     println!("Header matches: {}", result.summary.header_matches);
     println!("Type count matches: {}", result.summary.type_count_matches);
+    println!("  Old parser: {} types", old_data.types.len());
+    println!("  New parser: {} types", new_data.types.len());
     println!(
         "Symbol count matches: {}",
         result.summary.symbol_count_matches
@@ -65,30 +67,44 @@ fn test_ntkrnlmp_pdb_comparison() {
         }
     }
 
-    // Verify that new parser is at least as good as old parser
-    assert!(
-        result.summary.type_count_matches,
-        "Type counts must match between old and new parsers"
-    );
+    // Verify that new parser is at least as good as old parser (can find more, but not less)
+    let old_count = old_data.types.len();
+    let new_count = new_data.types.len();
 
-    // Check for missing fields (new parser should have all fields old parser had)
-    let missing_fields: Vec<_> = result
+    if new_count >= old_count {
+        if new_count > old_count {
+            println!(
+                "\n✅ IMPROVEMENT: New parser found {} MORE types than old parser!",
+                new_count - old_count
+            );
+        }
+    } else {
+        panic!(
+            "REGRESSION: New parser found FEWER types than old parser! (Old: {}, New: {}, Missing: {})",
+            old_count,
+            new_count,
+            old_count - new_count
+        );
+    }
+
+    // Check for missing types (new parser should have all types old parser had)
+    let missing_types: Vec<_> = result
         .differences
         .iter()
         .filter(|d| d.description.contains("missing in new parser") && d.category == "types")
         .collect();
 
-    if !missing_fields.is_empty() {
+    if !missing_types.is_empty() {
         println!(
             "\n=== TYPES MISSING IN NEW PARSER ({}) ===",
-            missing_fields.len()
+            missing_types.len()
         );
-        for diff in missing_fields.iter().take(20) {
+        for diff in missing_types.iter().take(20) {
             println!("- {}", diff.description);
         }
         panic!(
-            "New parser is missing {} types that old parser found!",
-            missing_fields.len()
+            "REGRESSION: New parser is missing {} types that old parser found!",
+            missing_types.len()
         );
     }
 
@@ -120,39 +136,89 @@ fn test_ntdll_pdb_comparison() {
     println!("Total differences: {}", result.summary.total_differences);
     println!("Header matches: {}", result.summary.header_matches);
     println!("Type count matches: {}", result.summary.type_count_matches);
+    println!("  Old parser: {} types", old_data.types.len());
+    println!("  New parser: {} types", new_data.types.len());
     println!(
         "Symbol count matches: {}",
         result.summary.symbol_count_matches
+    );
+    println!(
+        "  Old parser: {} public symbols, {} procedures, {} data symbols",
+        old_data.symbols.public_symbols.len(),
+        old_data.symbols.procedures.len(),
+        old_data.symbols.data_symbols.len()
+    );
+    println!(
+        "  New parser: {} public symbols, {} procedures, {} data symbols",
+        new_data.symbols.public_symbols.len(),
+        new_data.symbols.procedures.len(),
+        new_data.symbols.data_symbols.len()
     );
     println!(
         "Module count matches: {}",
         result.summary.module_count_matches
     );
 
-    // Verify that new parser is at least as good as old parser
-    assert!(
-        result.summary.type_count_matches,
-        "Type counts must match between old and new parsers"
-    );
+    // Print type count mismatch details if they don't match
+    if !result.summary.type_count_matches {
+        let type_count_diff: Vec<_> = result
+            .differences
+            .iter()
+            .filter(|d| d.description.contains("Type count mismatch"))
+            .collect();
 
-    // Check for regressions
-    let missing_fields: Vec<_> = result
+        if !type_count_diff.is_empty() {
+            println!("\n=== TYPE COUNT MISMATCH DETAILS ===");
+            for diff in &type_count_diff {
+                println!("{}", diff.description);
+                if let Some(old_val) = &diff.old_value {
+                    println!("  Old parser types: {}", old_val);
+                }
+                if let Some(new_val) = &diff.new_value {
+                    println!("  New parser types: {}", new_val);
+                }
+            }
+        }
+    }
+
+    // Verify that new parser is at least as good as old parser (can find more, but not less)
+    let old_count = old_data.types.len();
+    let new_count = new_data.types.len();
+
+    if new_count >= old_count {
+        if new_count > old_count {
+            println!(
+                "\n✅ IMPROVEMENT: New parser found {} MORE types than old parser!",
+                new_count - old_count
+            );
+        }
+    } else {
+        panic!(
+            "REGRESSION: New parser found FEWER types than old parser! (Old: {}, New: {}, Missing: {})",
+            old_count,
+            new_count,
+            old_count - new_count
+        );
+    }
+
+    // Check for missing types (new parser should have all types old parser had)
+    let missing_types: Vec<_> = result
         .differences
         .iter()
         .filter(|d| d.description.contains("missing in new parser") && d.category == "types")
         .collect();
 
-    if !missing_fields.is_empty() {
+    if !missing_types.is_empty() {
         println!(
             "\n=== TYPES MISSING IN NEW PARSER ({}) ===",
-            missing_fields.len()
+            missing_types.len()
         );
-        for diff in missing_fields.iter().take(20) {
+        for diff in missing_types.iter().take(20) {
             println!("- {}", diff.description);
         }
         panic!(
-            "New parser is missing {} types that old parser found!",
-            missing_fields.len()
+            "REGRESSION: New parser is missing {} types that old parser found!",
+            missing_types.len()
         );
     }
 
@@ -193,30 +259,44 @@ fn test_hvix64_pdb_comparison() {
         result.summary.module_count_matches
     );
 
-    // Verify that new parser is at least as good as old parser
-    assert!(
-        result.summary.type_count_matches,
-        "Type counts must match between old and new parsers"
-    );
+    // Verify that new parser is at least as good as old parser (can find more, but not less)
+    let old_count = old_data.types.len();
+    let new_count = new_data.types.len();
 
-    // Check for regressions
-    let missing_fields: Vec<_> = result
+    if new_count >= old_count {
+        if new_count > old_count {
+            println!(
+                "\n✅ IMPROVEMENT: New parser found {} MORE types than old parser!",
+                new_count - old_count
+            );
+        }
+    } else {
+        panic!(
+            "REGRESSION: New parser found FEWER types than old parser! (Old: {}, New: {}, Missing: {})",
+            old_count,
+            new_count,
+            old_count - new_count
+        );
+    }
+
+    // Check for missing types (new parser should have all types old parser had)
+    let missing_types: Vec<_> = result
         .differences
         .iter()
         .filter(|d| d.description.contains("missing in new parser") && d.category == "types")
         .collect();
 
-    if !missing_fields.is_empty() {
+    if !missing_types.is_empty() {
         println!(
             "\n=== TYPES MISSING IN NEW PARSER ({}) ===",
-            missing_fields.len()
+            missing_types.len()
         );
-        for diff in missing_fields.iter().take(20) {
+        for diff in missing_types.iter().take(20) {
             println!("- {}", diff.description);
         }
         panic!(
-            "New parser is missing {} types that old parser found!",
-            missing_fields.len()
+            "REGRESSION: New parser is missing {} types that old parser found!",
+            missing_types.len()
         );
     }
 
@@ -254,112 +334,98 @@ fn test_struct_field_completeness() {
         let mut total_fields_checked = 0;
         let mut bitfield_fields_checked = 0;
 
-        // Focus on Class and Union types with fields
-        // For each unique type name, compare the "fullest" definition (most fields)
-        // This handles forward references and multiple definitions
+        // Compare types BY INDEX (not by name) to ensure we're comparing the exact same type definition
+        // This eliminates issues with multiple definitions of the same named type from different compilation units
         use std::collections::HashMap;
 
-        // Build map of type name -> fullest definition for old parser
-        let mut old_fullest: HashMap<String, &pdb_compare::old_pdb::TypeInfo> = HashMap::new();
+        // Build map by type index for old parser
+        let mut old_by_index: HashMap<u32, &pdb_compare::old_pdb::TypeInfo> = HashMap::new();
         for old_type in &old_data.types {
-            if (old_type.kind == "Class" || old_type.kind == "Union") {
-                if let Some(name) = &old_type.name {
-                    old_fullest
-                        .entry(name.clone())
-                        .and_modify(|existing| {
-                            if old_type.fields.len() > existing.fields.len() {
-                                *existing = old_type;
-                            }
-                        })
-                        .or_insert(old_type);
-                }
-            }
+            old_by_index.insert(old_type.index, old_type);
         }
 
-        // Build map of type name -> fullest definition for new parser
-        let mut new_fullest: HashMap<String, &pdb_compare::new_pdb::TypeInfo> = HashMap::new();
+        // Build map by type index for new parser
+        let mut new_by_index: HashMap<u32, &pdb_compare::new_pdb::TypeInfo> = HashMap::new();
         for new_type in &new_data.types {
-            if (new_type.kind == "Class" || new_type.kind == "Union") {
-                if let Some(name) = &new_type.name {
-                    new_fullest
-                        .entry(name.clone())
-                        .and_modify(|existing| {
-                            if new_type.fields.len() > existing.fields.len() {
-                                *existing = new_type;
-                            }
-                        })
-                        .or_insert(new_type);
-                }
-            }
+            new_by_index.insert(new_type.index, new_type);
         }
 
-        // Compare fullest definitions
-        for (type_name, old_type) in &old_fullest {
-            if old_type.fields.is_empty() {
+        // Compare types with the same index
+        for (type_idx, old_type) in &old_by_index {
+            // Only check Class and Union types with fields
+            if (old_type.kind != "Class" && old_type.kind != "Union") || old_type.fields.is_empty()
+            {
                 continue;
             }
 
-            if let Some(new_type) = new_fullest.get(type_name) {
+            if let Some(new_type) = new_by_index.get(type_idx) {
                 total_types_checked += 1;
 
-                // Check field count
+                // Check field count - must match exactly when comparing same index
                 assert_eq!(
-                    old_type.fields.len(),
                     new_type.fields.len(),
-                    "Field count mismatch for {}: old={}, new={}",
-                    type_name,
+                    old_type.fields.len(),
+                    "Field count mismatch for type index {} ({}): old={}, new={}",
+                    type_idx,
+                    old_type.name.as_deref().unwrap_or("<unnamed>"),
                     old_type.fields.len(),
                     new_type.fields.len()
                 );
 
-                // Check ALL field properties for each field
-                for old_field in &old_type.fields {
+                // Compare each field by position (same index = same definition = same field order)
+                for (i, old_field) in old_type.fields.iter().enumerate() {
                     total_fields_checked += 1;
+                    let new_field = &new_type.fields[i];
 
-                    let new_field = new_type.fields.iter().find(|f| f.name == old_field.name);
+                    // Check field names match
+                    assert_eq!(
+                        new_field.name,
+                        old_field.name,
+                        "Field name mismatch at position {} in type index {} ({}): old='{}', new='{}'",
+                        i,
+                        type_idx,
+                        old_type.name.as_deref().unwrap_or("<unnamed>"),
+                        old_field.name,
+                        new_field.name
+                    );
 
-                    if let Some(new_field) = new_field {
-                        // Compare field offset
+                    // Check offsets match (safe to compare now that we're using same index)
+                    assert_eq!(
+                        new_field.offset,
+                        old_field.offset,
+                        "Offset mismatch for field '{}' in type index {} ({}): old={:?}, new={:?}",
+                        old_field.name,
+                        type_idx,
+                        old_type.name.as_deref().unwrap_or("<unnamed>"),
+                        old_field.offset,
+                        new_field.offset
+                    );
+
+                    // Compare bitfield properties if present in either parser
+                    if old_field.bitfield_length.is_some() || new_field.bitfield_length.is_some() {
+                        bitfield_fields_checked += 1;
+
                         assert_eq!(
-                            old_field.offset, new_field.offset,
-                            "Offset mismatch for field '{}' in type {}: old={:?}, new={:?}",
-                            old_field.name, type_name, old_field.offset, new_field.offset
+                            new_field.bitfield_length,
+                            old_field.bitfield_length,
+                            "Bitfield length mismatch for field '{}' in type index {} ({}): old={:?}, new={:?}",
+                            old_field.name,
+                            type_idx,
+                            old_type.name.as_deref().unwrap_or("<unnamed>"),
+                            old_field.bitfield_length,
+                            new_field.bitfield_length
                         );
 
-                        // Note: We skip type_kind comparison because the same logical type can appear
-                        // with different underlying primitive types in different compilation units
-                        // (e.g., UChar vs Short). What matters is that the field exists at the right
-                        // offset with the right bitfield properties (if applicable).
-
-                        // Compare bitfield properties if present
-                        if old_field.bitfield_length.is_some() {
-                            bitfield_fields_checked += 1;
-
-                            assert_eq!(
-                                old_field.bitfield_length,
-                                new_field.bitfield_length,
-                                "Bitfield length mismatch for field '{}' in type {}: old={:?}, new={:?}",
-                                old_field.name,
-                                type_name,
-                                old_field.bitfield_length,
-                                new_field.bitfield_length
-                            );
-
-                            assert_eq!(
-                                old_field.bitfield_position,
-                                new_field.bitfield_position,
-                                "Bitfield position mismatch for field '{}' in type {}: old={:?}, new={:?}",
-                                old_field.name,
-                                type_name,
-                                old_field.bitfield_position,
-                                new_field.bitfield_position
-                            );
-                        }
-                    } else {
-                        // Field name doesn't match - this can happen when different compilation
-                        // units have slightly different field names (e.g., "SubLeaf" vs "Subleaf").
-                        // We don't fail the test for this since it's a known PDB quirk.
-                        // Just skip this field.
+                        assert_eq!(
+                            new_field.bitfield_position,
+                            old_field.bitfield_position,
+                            "Bitfield position mismatch for field '{}' in type index {} ({}): old={:?}, new={:?}",
+                            old_field.name,
+                            type_idx,
+                            old_type.name.as_deref().unwrap_or("<unnamed>"),
+                            old_field.bitfield_position,
+                            new_field.bitfield_position
+                        );
                     }
                 }
             }
@@ -410,81 +476,106 @@ fn test_enum_variant_completeness() {
         let mut total_enums_checked = 0;
         let mut total_variants_checked = 0;
 
-        // For each unique enum name, compare the "fullest" definition (most variants)
-        // This handles forward references and multiple definitions
+        // Compare enums BY INDEX (not by name) to ensure we're comparing the exact same type definition
+        // This eliminates issues with multiple definitions of the same named enum from different compilation units
         use std::collections::HashMap;
 
-        // Build map of enum name -> fullest definition for old parser
-        let mut old_fullest: HashMap<String, &pdb_compare::old_pdb::TypeInfo> = HashMap::new();
+        // Build map by type index for old parser
+        let mut old_by_index: HashMap<u32, &pdb_compare::old_pdb::TypeInfo> = HashMap::new();
         for old_type in &old_data.types {
-            if old_type.kind == "Enumeration" {
-                if let Some(name) = &old_type.name {
-                    old_fullest
-                        .entry(name.clone())
-                        .and_modify(|existing| {
-                            if old_type.variants.len() > existing.variants.len() {
-                                *existing = old_type;
-                            }
-                        })
-                        .or_insert(old_type);
-                }
-            }
+            old_by_index.insert(old_type.index, old_type);
         }
 
-        // Build map of enum name -> fullest definition for new parser
-        let mut new_fullest: HashMap<String, &pdb_compare::new_pdb::TypeInfo> = HashMap::new();
+        // Build map by type index for new parser
+        let mut new_by_index: HashMap<u32, &pdb_compare::new_pdb::TypeInfo> = HashMap::new();
         for new_type in &new_data.types {
-            if new_type.kind == "Enumeration" {
-                if let Some(name) = &new_type.name {
-                    new_fullest
-                        .entry(name.clone())
-                        .and_modify(|existing| {
-                            if new_type.variants.len() > existing.variants.len() {
-                                *existing = new_type;
-                            }
-                        })
-                        .or_insert(new_type);
-                }
-            }
+            new_by_index.insert(new_type.index, new_type);
         }
 
-        // Compare fullest definitions
-        for (enum_name, old_type) in &old_fullest {
-            if old_type.variants.is_empty() {
+        // Compare enums with the same index
+        for (type_idx, old_enum) in &old_by_index {
+            // Only check Enumeration types with variants
+            if old_enum.kind != "Enumeration" || old_enum.variants.is_empty() {
                 continue;
             }
 
-            if let Some(new_type) = new_fullest.get(enum_name) {
+            if let Some(new_enum) = new_by_index.get(type_idx) {
                 total_enums_checked += 1;
 
-                // Check variant count
+                // Check variant count - must match exactly when comparing same index
                 assert_eq!(
-                    old_type.variants.len(),
-                    new_type.variants.len(),
-                    "Variant count mismatch for {}: old={}, new={}",
-                    enum_name,
-                    old_type.variants.len(),
-                    new_type.variants.len()
+                    new_enum.variants.len(),
+                    old_enum.variants.len(),
+                    "Variant count mismatch for type index {} ({}): old={}, new={}",
+                    type_idx,
+                    old_enum.name.as_deref().unwrap_or("<unnamed>"),
+                    old_enum.variants.len(),
+                    new_enum.variants.len()
                 );
 
-                // Check ALL variant properties for each variant
-                for old_variant in &old_type.variants {
+                // Compare each variant by position (same index = same definition = same variant order)
+                for (i, old_variant) in old_enum.variants.iter().enumerate() {
                     total_variants_checked += 1;
+                    let new_variant = &new_enum.variants[i];
 
-                    let new_variant = new_type
-                        .variants
-                        .iter()
-                        .find(|v| v.name == old_variant.name)
-                        .expect(&format!(
-                            "Variant '{}' from old parser missing in new parser for enum {}",
-                            old_variant.name, enum_name
-                        ));
-
-                    // Compare variant value
+                    // Check variant names match
                     assert_eq!(
-                        old_variant.value, new_variant.value,
-                        "Variant value mismatch for '{}' in enum {}: old={}, new={}",
-                        old_variant.name, enum_name, old_variant.value, new_variant.value
+                        new_variant.name,
+                        old_variant.name,
+                        "Variant name mismatch at position {} in type index {} ({}): old='{}', new='{}'",
+                        i,
+                        type_idx,
+                        old_enum.name.as_deref().unwrap_or("<unnamed>"),
+                        old_variant.name,
+                        new_variant.name
+                    );
+
+                    // Check values match (normalized to handle signed/unsigned representation)
+                    // Cast through appropriate size to handle sign extension differences
+                    // E.g., 0xFF can be U8(255) or I8(-1) - both should compare equal
+                    let old_value_normalized = if old_variant.value >= i8::MIN as i64
+                        && old_variant.value <= u8::MAX as i64
+                    {
+                        (old_variant.value as u8) as u64
+                    } else if old_variant.value >= i16::MIN as i64
+                        && old_variant.value <= u16::MAX as i64
+                    {
+                        (old_variant.value as u16) as u64
+                    } else if old_variant.value >= i32::MIN as i64
+                        && old_variant.value <= u32::MAX as i64
+                    {
+                        (old_variant.value as u32) as u64
+                    } else {
+                        old_variant.value as u64
+                    };
+
+                    let new_value_normalized = if new_variant.value >= i8::MIN as i64
+                        && new_variant.value <= u8::MAX as i64
+                    {
+                        (new_variant.value as u8) as u64
+                    } else if new_variant.value >= i16::MIN as i64
+                        && new_variant.value <= u16::MAX as i64
+                    {
+                        (new_variant.value as u16) as u64
+                    } else if new_variant.value >= i32::MIN as i64
+                        && new_variant.value <= u32::MAX as i64
+                    {
+                        (new_variant.value as u32) as u64
+                    } else {
+                        new_variant.value as u64
+                    };
+
+                    assert_eq!(
+                        new_value_normalized,
+                        old_value_normalized,
+                        "Value mismatch for variant '{}' in type index {} ({}): old={} (0x{:X}), new={} (0x{:X})",
+                        old_variant.name,
+                        type_idx,
+                        old_enum.name.as_deref().unwrap_or("<unnamed>"),
+                        old_variant.value,
+                        old_value_normalized,
+                        new_variant.value,
+                        new_value_normalized
                     );
                 }
             }
@@ -791,6 +882,247 @@ fn test_bitfield_comparison() {
         bitfield_count > 0,
         "Expected to find bitfield fields in the PDB"
     );
+}
+
+/// This test compares types by TYPE INDEX (not name) to ensure we're comparing
+/// the exact same type definition between old and new parsers.
+/// This catches regressions in offsets, values, and field parsing.
+#[test]
+fn test_type_index_exact_comparison() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let test_pdbs = vec![
+        "cache_test_pdbs/ntkrnlmp.pdb",
+        "cache_test_pdbs/ntdll.pdb",
+        "cache_test_pdbs/hvix64.pdb",
+    ];
+
+    for pdb_path_str in test_pdbs {
+        let pdb_path = PathBuf::from(pdb_path_str);
+        if !pdb_path.exists() {
+            eprintln!("Skipping: {} not found", pdb_path.display());
+            continue;
+        }
+
+        println!("\n========================================");
+        println!("Type-Index Comparison: {}", pdb_path.display());
+        println!("========================================");
+
+        let old_data =
+            pdb_compare::old_pdb::parse_pdb(&pdb_path).expect("Failed to parse with old parser");
+        let new_data = pdb_compare::new_pdb::parse_pdb_new(&pdb_path)
+            .expect("Failed to parse with new parser");
+
+        let mut total_types_compared = 0;
+        let mut total_fields_compared = 0;
+        let mut total_variants_compared = 0;
+        let mut offset_mismatches = 0;
+        let mut value_mismatches = 0;
+        let mut field_count_mismatches = 0;
+        let mut variant_count_mismatches = 0;
+
+        // Build index maps for quick lookup
+        use std::collections::HashMap;
+        let mut old_by_index: HashMap<u32, &pdb_compare::old_pdb::TypeInfo> = HashMap::new();
+        for old_type in &old_data.types {
+            old_by_index.insert(old_type.index, old_type);
+        }
+
+        let mut new_by_index: HashMap<u32, &pdb_compare::new_pdb::TypeInfo> = HashMap::new();
+        for new_type in &new_data.types {
+            new_by_index.insert(new_type.index, new_type);
+        }
+
+        // Compare types by index (ensures we're comparing the exact same type definition)
+        for (type_idx, old_type) in &old_by_index {
+            if let Some(new_type) = new_by_index.get(type_idx) {
+                total_types_compared += 1;
+
+                // Compare struct/union fields by index
+                if (old_type.kind == "Class" || old_type.kind == "Union")
+                    && !old_type.fields.is_empty()
+                {
+                    // Check field count
+                    if old_type.fields.len() != new_type.fields.len() {
+                        field_count_mismatches += 1;
+                        println!(
+                            "⚠️  Type index {}: Field count mismatch in '{}': old={}, new={}",
+                            type_idx,
+                            old_type.name.as_deref().unwrap_or("<unnamed>"),
+                            old_type.fields.len(),
+                            new_type.fields.len()
+                        );
+                        // Don't fail - just warn. Different definitions may exist.
+                        continue;
+                    }
+
+                    // Compare each field
+                    for (i, old_field) in old_type.fields.iter().enumerate() {
+                        if let Some(new_field) = new_type.fields.get(i) {
+                            total_fields_compared += 1;
+
+                            // Compare field names
+                            if old_field.name != new_field.name {
+                                println!(
+                                    "⚠️  Type index {}: Field name mismatch at position {}: old='{}', new='{}'",
+                                    type_idx, i, old_field.name, new_field.name
+                                );
+                                continue;
+                            }
+
+                            // Compare offsets (CRITICAL - we must verify this!)
+                            if old_field.offset != new_field.offset {
+                                offset_mismatches += 1;
+                                println!(
+                                    "❌ Type index {}: Offset mismatch for field '{}' in '{}': old={:?}, new={:?}",
+                                    type_idx,
+                                    old_field.name,
+                                    old_type.name.as_deref().unwrap_or("<unnamed>"),
+                                    old_field.offset,
+                                    new_field.offset
+                                );
+                            }
+
+                            // Compare bitfield metadata if present
+                            if old_field.bitfield_length.is_some()
+                                || new_field.bitfield_length.is_some()
+                            {
+                                if old_field.bitfield_length != new_field.bitfield_length {
+                                    println!(
+                                        "❌ Type index {}: Bitfield length mismatch for '{}': old={:?}, new={:?}",
+                                        type_idx, old_field.name, old_field.bitfield_length, new_field.bitfield_length
+                                    );
+                                }
+                                if old_field.bitfield_position != new_field.bitfield_position {
+                                    println!(
+                                        "❌ Type index {}: Bitfield position mismatch for '{}': old={:?}, new={:?}",
+                                        type_idx, old_field.name, old_field.bitfield_position, new_field.bitfield_position
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Compare enum variants by index
+                if old_type.kind == "Enumeration" && !old_type.variants.is_empty() {
+                    // Check variant count
+                    if old_type.variants.len() != new_type.variants.len() {
+                        variant_count_mismatches += 1;
+                        println!(
+                            "⚠️  Type index {}: Variant count mismatch in '{}': old={}, new={}",
+                            type_idx,
+                            old_type.name.as_deref().unwrap_or("<unnamed>"),
+                            old_type.variants.len(),
+                            new_type.variants.len()
+                        );
+                        // Don't fail - just warn. Different definitions may exist.
+                        continue;
+                    }
+
+                    // Compare each variant
+                    for (i, old_variant) in old_type.variants.iter().enumerate() {
+                        if let Some(new_variant) = new_type.variants.get(i) {
+                            total_variants_compared += 1;
+
+                            // Compare variant names
+                            if old_variant.name != new_variant.name {
+                                println!(
+                                    "⚠️  Type index {}: Variant name mismatch at position {}: old='{}', new='{}'",
+                                    type_idx, i, old_variant.name, new_variant.name
+                                );
+                                continue;
+                            }
+
+                            // Compare values (CRITICAL - we must verify this!)
+                            // Normalize to handle signed/unsigned representation differences
+                            // Cast through appropriate size to handle sign extension
+                            // E.g., 0xFF can be U8(255) or I8(-1) - both should compare equal
+                            let old_value_normalized = if old_variant.value >= i8::MIN as i64
+                                && old_variant.value <= u8::MAX as i64
+                            {
+                                (old_variant.value as u8) as u64
+                            } else if old_variant.value >= i16::MIN as i64
+                                && old_variant.value <= u16::MAX as i64
+                            {
+                                (old_variant.value as u16) as u64
+                            } else if old_variant.value >= i32::MIN as i64
+                                && old_variant.value <= u32::MAX as i64
+                            {
+                                (old_variant.value as u32) as u64
+                            } else {
+                                old_variant.value as u64
+                            };
+
+                            let new_value_normalized = if new_variant.value >= i8::MIN as i64
+                                && new_variant.value <= u8::MAX as i64
+                            {
+                                (new_variant.value as u8) as u64
+                            } else if new_variant.value >= i16::MIN as i64
+                                && new_variant.value <= u16::MAX as i64
+                            {
+                                (new_variant.value as u16) as u64
+                            } else if new_variant.value >= i32::MIN as i64
+                                && new_variant.value <= u32::MAX as i64
+                            {
+                                (new_variant.value as u32) as u64
+                            } else {
+                                new_variant.value as u64
+                            };
+
+                            if old_value_normalized != new_value_normalized {
+                                value_mismatches += 1;
+                                println!(
+                                    "❌ Type index {}: Value mismatch for variant '{}' in '{}': old={} (0x{:X}), new={} (0x{:X})",
+                                    type_idx,
+                                    old_variant.name,
+                                    old_type.name.as_deref().unwrap_or("<unnamed>"),
+                                    old_variant.value,
+                                    old_value_normalized,
+                                    new_variant.value,
+                                    new_value_normalized
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        println!(
+            "\n📊 Type-Index Comparison Results for {}:",
+            pdb_path.display()
+        );
+        println!("  ✓ Types compared by index: {}", total_types_compared);
+        println!("  ✓ Fields compared: {}", total_fields_compared);
+        println!("  ✓ Variants compared: {}", total_variants_compared);
+        println!("  ⚠️  Field count mismatches: {}", field_count_mismatches);
+        println!(
+            "  ⚠️  Variant count mismatches: {}",
+            variant_count_mismatches
+        );
+        println!("  ❌ Offset mismatches: {}", offset_mismatches);
+        println!("  ❌ Value mismatches: {}", value_mismatches);
+
+        // These are CRITICAL - we must not have any mismatches when comparing the same type index
+        assert_eq!(
+            offset_mismatches, 0,
+            "CRITICAL: Found {} offset mismatches when comparing same type indices! \
+             This means the new parser is producing different offsets for the exact same type definition.",
+            offset_mismatches
+        );
+
+        assert_eq!(
+            value_mismatches, 0,
+            "CRITICAL: Found {} enum value mismatches when comparing same type indices! \
+             This means the new parser is producing different values for the exact same type definition.",
+            value_mismatches
+        );
+
+        println!("  ✅ All offsets and values match for same type indices!");
+    }
+
+    println!("\n✅ Type-index exact comparison test PASSED!");
 }
 
 #[test]

@@ -703,9 +703,10 @@ fn handle_symbol<'a>(
                 .try_into()?;
             sym.is_global = is_global;
             sym.is_managed = is_managed;
-            // Only collect data symbols from global symbol stream (not module streams)
-            // This matches old pdb crate behavior which only reads from global_symbols()
-            if is_global_stream {
+            // Only collect GLOBAL data symbols (S_GDATA32/S_GMANDATA) from global symbol stream
+            // Local data symbols (S_LDATA32/S_LMANDATA) in the global stream are ignored
+            // This matches old pdb crate behavior which checks sym.is_global before adding
+            if is_global_stream && is_global {
                 output_pdb.global_data.push(sym);
             }
         }

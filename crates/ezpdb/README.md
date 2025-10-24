@@ -25,9 +25,30 @@ The first two bullet points in particular can be particularly cumbersome if your
 
 The biggest differences are that `ezpdb` takes care of building the type heirarchy and copies all necessary information for ease of use.
 
+## Recent Improvements (v0.7.0)
+
+**Separated Address Types:** Symbol types now expose distinct fields for different address types:
+- `section`: PE section number (1-based)
+- `section_offset`: Raw offset within section
+- `rva`: Relative Virtual Address
+- `address`: Absolute virtual address (when `base_address` is provided)
+
+This provides clearer semantics, no information loss, and better type safety. See `EZPDB_IMPROVEMENTS_QUICK_REF.md` in the repository root for migration guide.
+
 ## Usage
 
 ```rust
 let parsed_pdb = ezpdb::parse_pdb(&opt.file, opt.base_address)?;
 println!("{:?}", parsed_pdb.assembly_info);
+
+// Access symbol addresses
+for symbol in &parsed_pdb.public_symbols {
+    if let Some(rva) = symbol.rva {
+        println!("{} at RVA: 0x{:x}", symbol.name, rva);
+    }
+    // When base_address is provided, use absolute address
+    if let Some(addr) = symbol.address {
+        println!("{} at address: 0x{:x}", symbol.name, addr);
+    }
+}
 ```

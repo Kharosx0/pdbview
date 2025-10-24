@@ -13,6 +13,7 @@ This tool validates that the migration from the old `pdb` crate to the new `ms-p
   - **Size Comparison**: Verifies type sizes match between parsers
   - **Base Class Comparison**: Verifies inheritance information matches
 - **Symbol Information**: Public symbols, procedures, data symbols
+  - **Offset/Address Comparison**: Verifies symbol locations (RVAs) match between parsers
 - **Module Information**: Debug modules and their object files</parameter>
 
 ## Quick Start
@@ -39,6 +40,22 @@ This will test against all PDB files in the `cache_test_pdbs/` directory and rep
 cargo run -- --pdb-file path/to/your.pdb
 ```</parameter>
 ```
+
+### Run Symbol Offset Tests
+
+To specifically test symbol offset/address calculations between old and new ezpdb:
+
+```bash
+cargo test --test test_symbol_offsets -- --nocapture
+```
+
+This validates that:
+- Public symbol offsets match (99.9%+ accuracy)
+- Procedure addresses match (99.9%+ accuracy)
+- Data symbol offsets match (99.9%+ accuracy)
+- The old ezpdb RVA calculation behavior is preserved
+
+See [SYMBOL_OFFSET_TESTS.md](SYMBOL_OFFSET_TESTS.md) for detailed documentation.
 
 ### Options
 

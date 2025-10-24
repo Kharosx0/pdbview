@@ -74,11 +74,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 same_type_count += 1;
             } else {
                 different_type_count += 1;
-                
+
                 // Print first 20 examples
                 if different_type_count <= 20 {
-                    println!("  Index 0x{:04x}: TPI={:20} IPI={:20} [IPI-only: {}]",
-                             idx, tpi_type_name, ipi_type_name, is_ipi_only);
+                    println!(
+                        "  Index 0x{:04x}: TPI={:20} IPI={:20} [IPI-only: {}]",
+                        idx, tpi_type_name, ipi_type_name, is_ipi_only
+                    );
                 }
             }
         }
@@ -93,7 +95,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     if different_type_count > 0 {
-        println!("⚠️  CRITICAL: {} collisions have DIFFERENT type variants!", different_type_count);
+        println!(
+            "⚠️  CRITICAL: {} collisions have DIFFERENT type variants!",
+            different_type_count
+        );
         println!("    This proves TPI-first lookup is WRONG when indices collide.");
         println!("    We must determine which stream based on record type or context.");
     } else if same_type_count == collision_count {
@@ -103,7 +108,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if ipi_only_type_count > 0 {
         println!();
-        println!("⚠️  {} collisions have IPI-only types (FuncId, MFuncId, etc.) on IPI side", ipi_only_type_count);
+        println!(
+            "⚠️  {} collisions have IPI-only types (FuncId, MFuncId, etc.) on IPI side",
+            ipi_only_type_count
+        );
         println!("    These types should ONLY exist in IPI according to LLVM docs.");
     }
 

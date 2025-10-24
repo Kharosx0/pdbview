@@ -324,7 +324,7 @@ pub fn parse_pdb_new(path: &Path) -> Result<NewPdbData> {
         .into_iter()
         .map(|s| PublicSymbol {
             name: s.name,
-            offset: s.offset.map(|o| o as u32),
+            offset: s.rva.map(|o| o as u32),
             is_function: s.is_function,
         })
         .collect();
@@ -334,7 +334,7 @@ pub fn parse_pdb_new(path: &Path) -> Result<NewPdbData> {
         .into_iter()
         .map(|p| ProcedureSymbol {
             name: p.name,
-            offset: p.address.map(|a| a as u32),
+            offset: p.rva.map(|a| a as u32),
             len: p.len as u32,
         })
         .collect();
@@ -344,7 +344,7 @@ pub fn parse_pdb_new(path: &Path) -> Result<NewPdbData> {
         .into_iter()
         .map(|d| DataSymbol {
             name: d.name,
-            offset: d.offset.map(|o| o as u32),
+            offset: d.rva.map(|o| o as u32),
         })
         .collect();
 
