@@ -173,8 +173,8 @@ pub fn print_plain(output: &mut impl Write, pdb_info: &ParsedPdb) -> io::Result<
     writeln!(output, "\t{:<10} Name", "Offset")?;
     for symbol in &pdb_info.public_symbols {
         write!(output, "\t")?;
-        if let Some(offset) = symbol.offset {
-            write!(output, "0x{:08X} ", offset)?;
+        if let Some(rva) = symbol.rva {
+            write!(output, "0x{:08X} ", rva)?;
         } else {
             write!(output, "{:<10} ", "")?;
         }
@@ -219,14 +219,14 @@ pub fn print_plain(output: &mut impl Write, pdb_info: &ParsedPdb) -> io::Result<
 
     for global in &pdb_info.global_data {
         write!(output, "\t")?;
-        if let Some(offset) = global.offset {
-            write!(output, "0x{:08X} ", offset)?;
+        if let Some(rva) = global.rva {
+            write!(output, "0x{:08X} ", rva)?;
         } else {
             write!(output, "{:<10} ", "")?;
         }
         writeln!(output, "{}", global.name)?;
 
-        let ty: &Type = &*global.ty.as_ref().borrow();
+        let ty: &Type = &global.ty.as_ref().borrow();
         writeln!(output, "\t\tType: {}", format_type_name(ty))?;
         writeln!(output, "\t\tSize: 0x{:X}", ty.type_size(pdb_info))?;
         writeln!(output, "\t\tIs Managed: {}", global.is_managed)?;
@@ -239,7 +239,7 @@ pub fn print_plain(output: &mut impl Write, pdb_info: &ParsedPdb) -> io::Result<
 
     let width = 20usize;
     for ty in pdb_info.types.values() {
-        let ty: &Type = &*ty.as_ref().borrow();
+        let ty: &Type = &ty.as_ref().borrow();
         match ty {
             Type::Class(class) => {
                 if class.properties.forward_reference {
@@ -271,11 +271,11 @@ pub fn print_plain(output: &mut impl Write, pdb_info: &ParsedPdb) -> io::Result<
                 // )?;
                 writeln!(output, "\tFields:")?;
                 for field in &class.fields {
-                    let field: &Type = &*field.as_ref().borrow();
+                    let field: &Type = &field.as_ref().borrow();
 
                     match field {
                         Type::Member(member) => {
-                            let member_ty: &Type = &*member.underlying_type.as_ref().borrow();
+                            let member_ty: &Type = &member.underlying_type.as_ref().borrow();
                             writeln!(
                                 output,
                                 "\t\t0x{:04X} {:width$} {}",
@@ -290,7 +290,7 @@ pub fn print_plain(output: &mut impl Write, pdb_info: &ParsedPdb) -> io::Result<
                                 output,
                                 "\t\t0x{:04X} <BaseClass> {}",
                                 base.offset,
-                                format_type_name(&*base.base_class.as_ref().borrow())
+                                format_type_name(&base.base_class.as_ref().borrow())
                             )?;
                         }
                         Type::VirtualBaseClass(_) => {
@@ -347,11 +347,11 @@ pub fn print_plain(output: &mut impl Write, pdb_info: &ParsedPdb) -> io::Result<
                 // )?;
                 writeln!(output, "\tFields:")?;
                 for field in &union.fields {
-                    let field: &Type = &*field.as_ref().borrow();
+                    let field: &Type = &field.as_ref().borrow();
 
                     match field {
                         Type::Member(member) => {
-                            let member_ty: &Type = &*member.underlying_type.as_ref().borrow();
+                            let member_ty: &Type = &member.underlying_type.as_ref().borrow();
                             writeln!(
                                 output,
                                 "\t\t0x{:04X} {:width$} {}",
@@ -366,7 +366,7 @@ pub fn print_plain(output: &mut impl Write, pdb_info: &ParsedPdb) -> io::Result<
                                 output,
                                 "\t\t0x{:04X} <BaseClass> {}",
                                 base.offset,
-                                format_type_name(&*base.base_class.as_ref().borrow())
+                                format_type_name(&base.base_class.as_ref().borrow())
                             )?;
                         }
                         Type::VirtualBaseClass(_) => {
@@ -411,14 +411,14 @@ pub fn print_plain(output: &mut impl Write, pdb_info: &ParsedPdb) -> io::Result<
                     writeln!(output, "\tSize: 0x{:X}", primitive.size())?;
                 }
                 let underlying_type = e.underlying_type.borrow();
-                writeln!(output, "\tType: {}", format_type_name(&*underlying_type))?;
+                writeln!(output, "\tType: {}", format_type_name(&underlying_type))?;
                 writeln!(output, "\tVariants:")?;
                 for variant in &e.variants {
                     let value = match variant.value {
                         VariantValue::U8(v) => v as u64,
                         VariantValue::U16(v) => v as u64,
                         VariantValue::U32(v) => v as u64,
-                        VariantValue::U64(v) => v as u64,
+                        VariantValue::U64(v) => v,
                         VariantValue::I8(v) => v as u64,
                         VariantValue::I16(v) => v as u64,
                         VariantValue::I32(v) => v as u64,
@@ -445,7 +445,7 @@ fn format_type_name(ty: &Type) -> String {
         Type::Union(union) => union.name.clone(),
         Type::Array(array) => format!(
             "{}{}",
-            format_type_name(&*array.element_type.as_ref().borrow()),
+            format_type_name(&array.element_type.as_ref().borrow()),
             array
                 .dimensions_elements
                 .iter()
@@ -458,7 +458,7 @@ fn format_type_name(ty: &Type) -> String {
             // TODO: Attributes
             match pointer.underlying_type.as_ref() {
                 Some(underlying_type) => {
-                    format!("{}*", format_type_name(&*underlying_type.as_ref().borrow()))
+                    format!("{}*", format_type_name(&underlying_type.as_ref().borrow()))
                 }
                 None => "<UNRESOLVED_POINTER_TYPE>".to_string(),
             }
@@ -485,15 +485,15 @@ fn format_type_name(ty: &Type) -> String {
                 format!("{}", other)
             }
         },
-        Type::Modifier(modifier) => format_type_name(&*modifier.underlying_type.as_ref().borrow()),
+        Type::Modifier(modifier) => format_type_name(&modifier.underlying_type.as_ref().borrow()),
         Type::Bitfield(bitfield) => format!(
             "{}:{}",
-            format_type_name(&*bitfield.underlying_type.as_ref().borrow()),
+            format_type_name(&bitfield.underlying_type.as_ref().borrow()),
             bitfield.len
         ),
         Type::Procedure(proc) => format!(
             "{} (*function){}",
-            format_type_name(&*proc.return_type.as_ref().unwrap().as_ref().borrow()),
+            format_type_name(&proc.return_type.as_ref().unwrap().as_ref().borrow()),
             proc.argument_list
                 .iter()
                 .fold(String::new(), |accum, argument| {
@@ -501,7 +501,7 @@ fn format_type_name(ty: &Type) -> String {
                         "{}{}{}",
                         &accum,
                         if accum.is_empty() { "" } else { "," },
-                        format_type_name(&*argument.as_ref().borrow())
+                        format_type_name(&argument.as_ref().borrow())
                     )
                 })
         ),
@@ -509,7 +509,7 @@ fn format_type_name(ty: &Type) -> String {
         Type::MemberFunction(member) => {
             format!(
                 "{} (*function){}",
-                format_type_name(&*member.return_type.as_ref().borrow()),
+                format_type_name(&member.return_type.as_ref().borrow()),
                 member
                     .argument_list
                     .iter()
@@ -518,7 +518,7 @@ fn format_type_name(ty: &Type) -> String {
                             "{}{}{}",
                             &accum,
                             if accum.is_empty() { "" } else { "," },
-                            format_type_name(&*argument.as_ref().borrow())
+                            format_type_name(&argument.as_ref().borrow())
                         )
                     })
             )
