@@ -358,8 +358,17 @@ pub struct PublicSymbol {
     /// None if the section is invalid (0).
     pub section: Option<u16>,
 
-    /// The offset within the section (file offset, not RVA).
-    /// This is the raw offset value from the PDB.
+    /// The offset within the PE section, measured in bytes from the start of that section.
+    ///
+    /// This is NOT a file offset (which would be measured from the start of the PE file).
+    /// This is NOT an RVA (which would be measured from the image base).
+    ///
+    /// # Example
+    ///
+    /// If a symbol is in section 2 at section_offset 0x100, and section 2 starts
+    /// at RVA 0x3000, then the symbol's RVA would be 0x3100 (0x3000 + 0x100).
+    ///
+    /// This is the raw offset value from the PDB symbol record.
     pub section_offset: u32,
 
     /// The Relative Virtual Address (RVA) of this symbol.
@@ -435,6 +444,111 @@ impl
     }
 }
 
+impl PublicSymbol {
+    /// Returns true if this symbol has a valid location (valid section and RVA).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ezpdb::PublicSymbol;
+    /// // A symbol with a valid location
+    /// let valid_symbol = PublicSymbol {
+    ///     name: "MyFunction".to_string(),
+    ///     is_code: true,
+    ///     is_function: true,
+    ///     is_managed: false,
+    ///     is_msil: false,
+    ///     section: Some(1),
+    ///     section_offset: 0x1000,
+    ///     rva: Some(0x2000),
+    ///     address: Some(0x140002000),
+    /// };
+    /// assert!(valid_symbol.has_valid_location());
+    ///
+    /// // A symbol with an invalid section
+    /// let invalid_symbol = PublicSymbol {
+    ///     name: "InvalidSymbol".to_string(),
+    ///     is_code: false,
+    ///     is_function: false,
+    ///     is_managed: false,
+    ///     is_msil: false,
+    ///     section: None,
+    ///     section_offset: 0x1000,
+    ///     rva: None,
+    ///     address: None,
+    /// };
+    /// assert!(!invalid_symbol.has_valid_location());
+    /// ```
+    pub fn has_valid_location(&self) -> bool {
+        self.section.is_some() && self.rva.is_some()
+    }
+
+    /// Returns the section and offset as a tuple, if available.
+    ///
+    /// This is useful for displaying or comparing section:offset pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ezpdb::PublicSymbol;
+    /// let symbol = PublicSymbol {
+    ///     name: "MyFunction".to_string(),
+    ///     is_code: true,
+    ///     is_function: true,
+    ///     is_managed: false,
+    ///     is_msil: false,
+    ///     section: Some(1),
+    ///     section_offset: 0x1000,
+    ///     rva: Some(0x2000),
+    ///     address: None,
+    /// };
+    /// assert_eq!(symbol.section_and_offset(), Some((1, 0x1000)));
+    /// ```
+    pub fn section_and_offset(&self) -> Option<(u16, u32)> {
+        self.section.map(|sec| (sec, self.section_offset))
+    }
+
+    /// Formats the symbol location as "section:offset" for display purposes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ezpdb::PublicSymbol;
+    /// let symbol = PublicSymbol {
+    ///     name: "MyFunction".to_string(),
+    ///     is_code: true,
+    ///     is_function: true,
+    ///     is_managed: false,
+    ///     is_msil: false,
+    ///     section: Some(1),
+    ///     section_offset: 0x1000,
+    ///     rva: Some(0x2000),
+    ///     address: None,
+    /// };
+    /// assert_eq!(symbol.format_location(), "0001:00001000".to_string());
+    ///
+    /// let invalid = PublicSymbol {
+    ///     name: "Invalid".to_string(),
+    ///     is_code: false,
+    ///     is_function: false,
+    ///     is_managed: false,
+    ///     is_msil: false,
+    ///     section: None,
+    ///     section_offset: 0x1000,
+    ///     rva: None,
+    ///     address: None,
+    /// };
+    /// assert_eq!(invalid.format_location(), "0000:00001000".to_string());
+    /// ```
+    pub fn format_location(&self) -> String {
+        format!(
+            "{:04x}:{:08x}",
+            self.section.unwrap_or(0),
+            self.section_offset
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 /// A data symbol (global or local variable).
@@ -459,8 +573,17 @@ pub struct Data {
     /// None if the section is invalid (0).
     pub section: Option<u16>,
 
-    /// The offset within the section (file offset, not RVA).
-    /// This is the raw offset value from the PDB.
+    /// The offset within the PE section, measured in bytes from the start of that section.
+    ///
+    /// This is NOT a file offset (which would be measured from the start of the PE file).
+    /// This is NOT an RVA (which would be measured from the image base).
+    ///
+    /// # Example
+    ///
+    /// If a data symbol is in section 3 at section_offset 0x200, and section 3 starts
+    /// at RVA 0x5000, then the symbol's RVA would be 0x5200 (0x5000 + 0x200).
+    ///
+    /// This is the raw offset value from the PDB symbol record.
     pub section_offset: u32,
 
     /// The Relative Virtual Address (RVA) of this symbol.
@@ -551,6 +674,34 @@ impl
     }
 }
 
+impl Data {
+    /// Returns true if this symbol has a valid location (valid section and RVA).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // A data symbol with a valid location
+    /// assert!(data_symbol.has_valid_location());
+    /// ```
+    pub fn has_valid_location(&self) -> bool {
+        self.section.is_some() && self.rva.is_some()
+    }
+
+    /// Returns the section and offset as a tuple, if available.
+    pub fn section_and_offset(&self) -> Option<(u16, u32)> {
+        self.section.map(|sec| (sec, self.section_offset))
+    }
+
+    /// Formats the symbol location as "section:offset" for display purposes.
+    pub fn format_location(&self) -> String {
+        format!(
+            "{:04x}:{:08x}",
+            self.section.unwrap_or(0),
+            self.section_offset
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 /// A procedure (function) symbol.
@@ -571,8 +722,18 @@ pub struct Procedure {
     /// None if the section is invalid (0).
     pub section: Option<u16>,
 
-    /// The offset within the section where this procedure starts (file offset, not RVA).
-    /// This is the raw offset value from the PDB.
+    /// The offset within the PE section where this procedure starts, measured in bytes
+    /// from the start of that section.
+    ///
+    /// This is NOT a file offset (which would be measured from the start of the PE file).
+    /// This is NOT an RVA (which would be measured from the image base).
+    ///
+    /// # Example
+    ///
+    /// If a procedure is in section 1 at section_offset 0x1000, and section 1 (.text)
+    /// starts at RVA 0x1000, then the procedure's RVA would be 0x2000 (0x1000 + 0x1000).
+    ///
+    /// This is the raw offset value from the PDB symbol record.
     pub section_offset: u32,
 
     /// The Relative Virtual Address (RVA) of this procedure's entry point.
@@ -669,6 +830,84 @@ impl
             is_dpc: false,   // Set by handle_symbol() based on SymKind
             prologue_end: sym.fixed.debug_start.get() as usize,
             epilogue_start: sym.fixed.debug_end.get() as usize,
+        }
+    }
+}
+
+impl Procedure {
+    /// Returns true if this procedure has a valid location (valid section and RVA).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // A procedure with a valid location
+    /// assert!(procedure.has_valid_location());
+    /// ```
+    pub fn has_valid_location(&self) -> bool {
+        self.section.is_some() && self.rva.is_some()
+    }
+
+    /// Returns the section and offset as a tuple, if available.
+    pub fn section_and_offset(&self) -> Option<(u16, u32)> {
+        self.section.map(|sec| (sec, self.section_offset))
+    }
+
+    /// Formats the procedure location as "section:offset" for display purposes.
+    pub fn format_location(&self) -> String {
+        format!(
+            "{:04x}:{:08x}",
+            self.section.unwrap_or(0),
+            self.section_offset
+        )
+    }
+
+    /// Returns the end RVA of this procedure (start RVA + length).
+    ///
+    /// Returns None if the procedure has no valid RVA.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// if let Some(end_rva) = procedure.end_rva() {
+    ///     println!("Procedure spans from {:x} to {:x}", procedure.rva.unwrap(), end_rva);
+    /// }
+    /// ```
+    pub fn end_rva(&self) -> Option<usize> {
+        self.rva.map(|rva| rva.saturating_add(self.len))
+    }
+
+    /// Returns the end address of this procedure (start address + length).
+    ///
+    /// Returns None if the procedure has no valid address.
+    pub fn end_address(&self) -> Option<usize> {
+        self.address.map(|addr| addr.saturating_add(self.len))
+    }
+
+    /// Returns true if the given RVA falls within this procedure's range.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// if procedure.contains_rva(0x2500) {
+    ///     println!("RVA 0x2500 is inside this procedure");
+    /// }
+    /// ```
+    pub fn contains_rva(&self, rva: usize) -> bool {
+        if let Some(start_rva) = self.rva {
+            let end_rva = start_rva.saturating_add(self.len);
+            rva >= start_rva && rva < end_rva
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if the given address falls within this procedure's range.
+    pub fn contains_address(&self, address: usize) -> bool {
+        if let Some(start_addr) = self.address {
+            let end_addr = start_addr.saturating_add(self.len);
+            address >= start_addr && address < end_addr
+        } else {
+            false
         }
     }
 }

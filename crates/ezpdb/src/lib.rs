@@ -78,7 +78,7 @@ pub mod error;
 pub mod symbol_types;
 pub mod type_info;
 
-pub use crate::symbol_types::ParsedPdb;
+pub use crate::symbol_types::{Data, ParsedPdb, Procedure, PublicSymbol};
 
 /// Helper to look up a type from TPI HashMap ONLY - enforces no IPI contamination
 pub(crate) fn lookup_tpi_type(idx: u32, output_pdb: &ParsedPdb) -> Option<TypeRef> {
