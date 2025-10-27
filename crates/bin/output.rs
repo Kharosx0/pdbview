@@ -527,6 +527,22 @@ fn format_type_name(ty: &Type) -> String {
     }
 }
 
-pub fn print_json(output: &mut impl Write, pdb_info: &ParsedPdb) -> io::Result<()> {
-    write!(output, "{}", serde_json::to_string(pdb_info)?)
+/// Print JSON output with optional pretty-printing.
+///
+/// # Arguments
+/// * `output` - Writer to output JSON to
+/// * `pdb_info` - Parsed PDB data to serialize
+/// * `pretty` - If true, output pretty-printed (multi-line) JSON
+///
+/// # Performance Note
+/// For large PDBs (90,000+ symbols), JSON serialization can produce
+/// 200MB+ of output. Pretty printing increases size by ~4x but makes
+/// output compatible with line-based tools (grep, less, etc.).
+pub fn print_json(output: &mut impl Write, pdb_info: &ParsedPdb, pretty: bool) -> io::Result<()> {
+    let json = if pretty {
+        serde_json::to_string_pretty(pdb_info)?
+    } else {
+        serde_json::to_string(pdb_info)?
+    };
+    write!(output, "{}", json)
 }

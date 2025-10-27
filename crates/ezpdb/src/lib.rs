@@ -71,7 +71,7 @@ use std::convert::TryInto;
 use std::fs::File;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub mod error;
@@ -152,7 +152,8 @@ struct ImageSectionHeader {
 
 /// Cached section headers for a PDB, keyed by GUID.
 /// This avoids re-reading the DBI stream for every symbol.
-type SectionHeaderCache = HashMap<uuid::Uuid, Vec<ImageSectionHeader>>;
+/// Uses Arc to avoid cloning the header vector on every cache hit.
+type SectionHeaderCache = HashMap<uuid::Uuid, Arc<Vec<ImageSectionHeader>>>;
 
 /// Global cache of section headers by PDB GUID.
 /// Using OnceLock + Mutex for thread-safe lazy initialization.
@@ -190,27 +191,46 @@ fn read_section_headers_from_pdb(pdb: &Pdb) -> Option<Vec<ImageSectionHeader>> {
 ///
 /// This function checks the global cache first. If headers for this PDB's GUID
 /// are not cached, it reads them from the PDB and caches them for future use.
-fn get_section_headers(pdb: &Pdb, guid: uuid::Uuid) -> Option<Vec<ImageSectionHeader>> {
+///
+/// Uses Arc for cheap cloning - cache hits only increment a reference count
+/// rather than cloning the entire vector (~2KB per PDB).
+fn get_section_headers(pdb: &Pdb, guid: uuid::Uuid) -> Option<Arc<Vec<ImageSectionHeader>>> {
     let cache = get_section_header_cache();
 
-    // Try to get from cache first
+    // Try to get from cache first (cheap Arc clone)
     {
-        let cache_guard = cache.lock().ok()?;
+        let cache_guard = match cache.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                warn!("Section header cache lock poisoned: {}", e);
+                return None;
+            }
+        };
+
         if let Some(headers) = cache_guard.get(&guid) {
-            return Some(headers.clone());
+            return Some(Arc::clone(headers));
         }
     }
 
     // Not in cache, read from PDB
     let headers = read_section_headers_from_pdb(pdb)?;
+    let headers_arc = Arc::new(headers);
 
-    // Store in cache
+    // Store in cache (cheap Arc clone)
     {
-        let mut cache_guard = cache.lock().ok()?;
-        cache_guard.insert(guid, headers.clone());
+        let mut cache_guard = match cache.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                warn!("Failed to cache section headers: {}", e);
+                // Still return the headers we read
+                return Some(headers_arc);
+            }
+        };
+
+        cache_guard.insert(guid, Arc::clone(&headers_arc));
     }
 
-    Some(headers)
+    Some(headers_arc)
 }
 
 /// Converts a section:offset pair to an RVA (Relative Virtual Address).

@@ -11,6 +11,15 @@ pub enum CliArgumentError {
     InvalidValue(&'static str, String),
 }
 
+/// Parse base address from either decimal or hexadecimal (0x prefix) format
+fn parse_base_address(s: &str) -> Result<usize, std::num::ParseIntError> {
+    if let Some(hex_str) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        usize::from_str_radix(hex_str, 16)
+    } else {
+        s.parse::<usize>()
+    }
+}
+
 #[derive(StructOpt, Debug)]
 #[structopt(name = "pdbview")]
 struct Opt {
@@ -22,10 +31,15 @@ struct Opt {
     #[structopt(short, long, default_value = "plain")]
     format: OutputFormatType,
 
-    /// Base address of module in-memory. If provided, all "offset" fields
-    /// will be added to the provided base address
-    #[structopt(short, long)]
+    /// Base address of module in-memory. Accepts decimal or hex (0x prefix).
+    /// Example: 0x140000000 or 5368709120
+    /// If provided, computed addresses will be RVA + base_address
+    #[structopt(short, long, parse(try_from_str = parse_base_address))]
     base_address: Option<usize>,
+
+    /// Pretty-print JSON output (ignored for non-JSON formats)
+    #[structopt(long)]
+    pretty_json: bool,
 
     /// PDB file to process
     #[structopt(name = "FILE", parse(from_os_str))]
@@ -65,7 +79,9 @@ fn main() -> anyhow::Result<()> {
 
     match opt.format {
         OutputFormatType::Plain => output::print_plain(&mut stdout_lock, &parsed_pdb)?,
-        OutputFormatType::Json => output::print_json(&mut stdout_lock, &parsed_pdb)?,
+        OutputFormatType::Json => {
+            output::print_json(&mut stdout_lock, &parsed_pdb, opt.pretty_json)?
+        }
     }
 
     Ok(())
