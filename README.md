@@ -15,19 +15,21 @@ cargo install pdbview
 ## Usage
 
 ```
-pdbview 0.1.0
+pdbview 0.6.0
 
 USAGE:
     pdbview [FLAGS] [OPTIONS] <FILE>
 
 FLAGS:
-    -d, --debug      Print debug information
-    -h, --help       Prints help information
-    -V, --version    Prints version information
+    -d, --debug          Print debug information
+    -h, --help           Prints help information
+        --pretty-json    Pretty-print JSON output (ignored for non-JSON formats)
+    -V, --version        Prints version information
 
 OPTIONS:
-    -b, --base-address <base-address>    Base address of module in-memory. If provided, all "offset" fields will be
-                                         added to the provided base address
+    -b, --base-address <base-address>    Base address of module in-memory. Accepts decimal or hex (0x prefix).
+                                         Example: 0x140000000 or 5368709120
+                                         If provided, computed addresses will be RVA + base_address
     -f, --format <format>                Output format type. Options include: plain, json [default: plain]
 
 ARGS:
@@ -35,10 +37,31 @@ ARGS:
  
 ```
 
-Example:
+### Examples
 
-```
+**Basic usage:**
+```bash
 pdbview example.pdb
+```
+
+**With hex base address (new in v0.6.0):**
+```bash
+pdbview --base-address 0x140000000 ntdll.pdb
+```
+
+**With decimal base address (backward compatible):**
+```bash
+pdbview --base-address 5368709120 ntdll.pdb
+```
+
+**JSON output with pretty printing (new in v0.6.0):**
+```bash
+pdbview --format json --pretty-json example.pdb > output.json
+```
+
+**Compact JSON (default):**
+```bash
+pdbview --format json example.pdb > compact.json
 ```
 
 ## Included Information
