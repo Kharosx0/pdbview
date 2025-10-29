@@ -9,7 +9,7 @@ repository = "https://github.com/landaire/pdbview"
 description = "High-level library for https://crates.io/crates/pdb"
 
 [dependencies]
-ms-pdb = { git = "https://github.com/kharosx0/pdb-rs", branch = "bitfield_support" }
+ms-pdb = "0.1.12"
 anyhow = "1.0"
 thiserror = "1.0"
 log = "0.4"
